@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="detail-page">
+    <div class="detail-header">
+        <div>
+            <h1>{{ task.title }}</h1>
+            <span class="badge badge-{{ status }}">{{ status }}</span>
+        </div>
+        <div class="detail-actions">
+            <a href="/tasks/{{ task.id }}/edit" class="button button-secondary">Edit</a>
+            <form action="/tasks/{{ task.id }}/toggle" method="post">
+                <button class="button button-primary" type="submit">{% if task.done %}Mark Pending{% else %}Mark Done{% endif %}</button>
+            </form>
+        </div>
+    </div>
+
+    <article class="detail-card">
+        <dl>
+            <dt>Due time</dt><dd>{{ task.due_time | pretty_datetime }}</dd>
+            <dt>Description</dt><dd>{{ task.description or 'No description' }}</dd>
+            <dt>Created</dt><dd>{{ task.created_at | pretty_datetime }}</dd>
+            <dt>Updated</dt><dd>{{ task.updated_at | pretty_datetime }}</dd>
+            {% if task.completed_at %}<dt>Completed</dt><dd>{{ task.completed_at | pretty_datetime }}</dd>{% endif %}
+        </dl>
+    </article>
+
+    <form action="/tasks/{{ task.id }}/delete" method="post" onsubmit="return confirm('Delete this task?');">
+        <button type="submit" class="button button-danger">Delete Task</button>
+    </form>
+</section>
+{% endblock %}

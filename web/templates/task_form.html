@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="form-page">
+    <h1>{% if mode == 'create' %}New Task{% else %}Edit Task{% endif %}</h1>
+    <p>Create or update a reminder for Albus to track.</p>
+
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+    <form method="post" class="task-form">
+        <label>
+            Title
+            <input type="text" name="title" placeholder="Example: Feed Albus" value="{{ task.title if task else '' }}" required>
+        </label>
+        <label>
+            Description
+            <textarea name="description" rows="4" placeholder="Optional notes">{{ task.description if task and task.description else '' }}</textarea>
+        </label>
+        <label>
+            Due time
+            <input type="datetime-local" name="due_time" value="{{ task.due_time | html_datetime if task else '' }}" required>
+        </label>
+        <div class="form-actions">
+            <a href="/" class="button button-secondary">Cancel</a>
+            <button type="submit" class="button button-primary">{% if mode == 'create' %}Create Task{% else %}Save Changes{% endif %}</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

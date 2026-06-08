@@ -1,0 +1,13 @@
+[Unit]
+Description=Albus Barks E-Ink Dashboard
+After=network-online.target albus-barks-web.service
+Wants=network-online.target albus-barks-web.service
+
+[Service]
+WorkingDirectory=/home/albus/albus-barks
+ExecStart=/home/albus/albus-barks/.venv/bin/python -m dashboard.main
+Restart=always
+User=albus
+
+[Install]
+WantedBy=multi-user.target

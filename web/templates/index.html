@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+    <div>
+        <h1>Tasks</h1>
+        <p>Albus barks when something needs attention and gets happy when you complete a task.</p>
+    </div>
+
+    <div
+        id="dog-card"
+        class="dog-card dog-{{ dog_state | lower }}"
+        data-current-state="{{ dog_state }}"
+        data-current-total="{{ counts.all }}"
+        data-current-pending="{{ counts.pending }}"
+        data-current-done="{{ counts.done }}"
+        data-current-attention="{{ counts.overdue + counts.due_soon }}"
+    >
+        <img
+            id="dog-mood-image"
+            src="/static/images/status/{{ dog_state }}/1.png"
+            alt="Albus {{ dog_state }}"
+            class="dog-preview"
+            onerror="this.onerror=null; this.src='/static/albus_preview.png';"
+        >
+
+        <strong id="dog-mood-state">{{ dog_state }}</strong>
+        <span id="dog-mood-message">{{ message }}</span>
+    </div>
+</section>
+
+<section class="filters">
+    <a class="{{ 'active' if filter_value == 'active' else '' }}" href="/?filter=active">Active</a>
+    <a class="{{ 'active' if filter_value == 'pending' else '' }}" href="/?filter=pending">Pending</a>
+    <a class="{{ 'active' if filter_value == 'done' else '' }}" href="/?filter=done">Done</a>
+    <a class="{{ 'active' if filter_value == 'all' else '' }}" href="/?filter=all">All</a>
+</section>
+
+<section class="stats-grid">
+    <article class="stat-card">
+        <span>Total</span>
+        <strong id="count-total">{{ counts.all }}</strong>
+    </article>
+
+    <article class="stat-card">
+        <span>Pending</span>
+        <strong id="count-pending">{{ counts.pending }}</strong>
+    </article>
+
+    <article class="stat-card">
+        <span>Done</span>
+        <strong id="count-done">{{ counts.done }}</strong>
+    </article>
+
+    <article class="stat-card">
+        <span>Needs attention</span>
+        <strong id="count-attention">{{ counts.overdue + counts.due_soon }}</strong>
+    </article>
+</section>
+
+{% if tasks %}
+<section class="task-list">
+    {% for item in tasks %}
+        {% set task = item.task %}
+        {% set status = item.status %}
+
+        <article class="task-card {{ status }}">
+            <div class="task-main">
+                <form action="/tasks/{{ task.id }}/toggle" method="post">
+                    <button class="checkbox" type="submit" aria-label="Toggle task">
+                        {% if task.done %}✓{% endif %}
+                    </button>
+                </form>
+
+                <div>
+                    <a href="/tasks/{{ task.id }}" class="task-title">{{ task.title }}</a>
+
+                    {% if task.description %}
+                        <p>{{ task.description }}</p>
+                    {% endif %}
+
+                    <div class="task-meta">
+                        <span>Due: {{ task.due_time | pretty_datetime }}</span>
+
+                        {% if status == "overdue" %}
+                            <span class="badge badge-danger">Overdue</span>
+                        {% elif status == "due-soon" %}
+                            <span class="badge badge-warning">Due soon</span>
+                        {% elif status == "done" %}
+                            <span class="badge badge-success">Done</span>
+                        {% else %}
+                            <span class="badge">Pending</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="task-actions">
+                <a href="/tasks/{{ task.id }}/edit">Edit</a>
+
+                <form
+                    action="/tasks/{{ task.id }}/delete"
+                    method="post"
+                    onsubmit="return confirm('Delete this task?');"
+                >
+                    <button type="submit" class="link-danger">Delete</button>
+                </form>
+            </div>
+        </article>
+    {% endfor %}
+</section>
+{% else %}
+<section class="empty-state">
+    <div class="empty-dog">🐶</div>
+    <h2>No tasks yet</h2>
+    <p>Create your first reminder and let Albus help you remember it.</p>
+    <a href="/tasks/new" class="button button-primary">Create task</a>
+</section>
+{% endif %}
+
+<script>
+    async function refreshAlbusState() {
+        try {
+            const response = await fetch("/api/dashboard-state", {
+                cache: "no-store"
+            });
+
+            if (!response.ok) {
+                throw new Error(`API returned ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            const dogCard = document.getElementById("dog-card");
+            const stateEl = document.getElementById("dog-mood-state");
+            const messageEl = document.getElementById("dog-mood-message");
+            const imageEl = document.getElementById("dog-mood-image");
+
+            const totalEl = document.getElementById("count-total");
+            const pendingEl = document.getElementById("count-pending");
+            const doneEl = document.getElementById("count-done");
+            const attentionEl = document.getElementById("count-attention");
+
+            const dogState = data.dog_state || "IDLE";
+            const dogMessage = data.message || "Albus is waiting";
+
+            if (dogCard) {
+                dogCard.className = `dog-card dog-${dogState.toLowerCase()}`;
+                dogCard.dataset.currentState = dogState;
+            }
+
+            if (stateEl) {
+                stateEl.textContent = dogState;
+            }
+
+            if (messageEl) {
+                messageEl.textContent = dogMessage;
+            }
+
+            if (imageEl) {
+                imageEl.src = `/static/images/status/${dogState}/1.png?t=${Date.now()}`;
+                imageEl.alt = `Albus ${dogState}`;
+            }
+
+            if (data.counts) {
+                const attention = Number(data.counts.overdue || 0) + Number(data.counts.due_soon || 0);
+
+                if (totalEl) totalEl.textContent = data.counts.all;
+                if (pendingEl) pendingEl.textContent = data.counts.pending;
+                if (doneEl) doneEl.textContent = data.counts.done;
+                if (attentionEl) attentionEl.textContent = attention;
+
+                const previousTotal = Number(dogCard?.dataset.currentTotal || 0);
+                const previousPending = Number(dogCard?.dataset.currentPending || 0);
+                const previousDone = Number(dogCard?.dataset.currentDone || 0);
+                const previousAttention = Number(dogCard?.dataset.currentAttention || 0);
+
+                const countsChanged =
+                    previousTotal !== Number(data.counts.all) ||
+                    previousPending !== Number(data.counts.pending) ||
+                    previousDone !== Number(data.counts.done) ||
+                    previousAttention !== attention;
+
+                if (countsChanged) {
+                    window.location.reload();
+                }
+            }
+        } catch (error) {
+            console.error("Failed to refresh Albus state:", error);
+        }
+    }
+
+    setInterval(refreshAlbusState, 5000);
+    refreshAlbusState();
+</script>
+{% endblock %}

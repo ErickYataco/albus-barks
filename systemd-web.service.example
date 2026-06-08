@@ -1,0 +1,13 @@
+[Unit]
+Description=Albus Barks Web App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/albus/albus-barks
+ExecStart=/home/albus/albus-barks/.venv/bin/uvicorn web.main:app --host 0.0.0.0 --port 5582
+Restart=always
+User=albus
+
+[Install]
+WantedBy=multi-user.target
