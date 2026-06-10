@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Albus Barks Google Calendar Sync Every 5 Minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=albus-barks-calendar-sync.service
+
+[Install]
+WantedBy=timers.target

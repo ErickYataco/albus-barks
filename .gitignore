@@ -21,6 +21,8 @@ runtime/*
 # Environment files
 .env
 .env.*
+config/google_credentials.json
+config/google_token.json
 
 # Logs
 *.log

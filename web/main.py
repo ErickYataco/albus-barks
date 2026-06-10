@@ -173,17 +173,43 @@ def api_tasks(session: Session = Depends(get_session)):
     return [crud.task_to_api(task) for task in tasks]
 
 
+@app.post("/api/calendar-test-task")
+def api_calendar_test_task(
+    title: str = Form("Calendar test meeting"),
+    due_time: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    parsed_due_time = parse_form_datetime(due_time)
+    if not parsed_due_time:
+        raise HTTPException(status_code=400, detail="Invalid due_time. Use YYYY-MM-DDTHH:MM.")
+
+    task = crud.upsert_calendar_task(
+        session=session,
+        external_id=f"local-test-{parsed_due_time.isoformat()}-{title}",
+        title=title,
+        due_time=parsed_due_time,
+        description="Local calendar animation test",
+    )
+    return crud.task_to_api(task)
+
+
 @app.get("/api/dashboard-state")
 def api_dashboard_state(session: Session = Depends(get_session)):
+    crud.mark_started_calendar_tasks_done(session)
+
     all_tasks = list(session.execute(select(Task)).scalars().all())
     tasks = crud.dashboard_tasks(session, limit=3)
 
     dog_state, message = crud.dog_state_for_tasks(all_tasks)
+    overlay_animation = crud.reminder_overlay_for_meeting(crud.meeting_task_for_reminder(session))
+    if overlay_animation:
+        session.commit()
 
     return {
         "dog_state": dog_state,
         "message": message,
         "counts": crud.count_tasks(session),
+        "overlay_animation": overlay_animation,
         "tasks": [
             {
                 "id": task.id,

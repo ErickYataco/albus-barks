@@ -67,7 +67,11 @@ def mood_icon(dog_state: str) -> str:
     return icons.get(dog_state.upper(), "•")
 
 
-def load_dog_image(dog_state: str, frame_path: Optional[Path] = None) -> Image.Image:
+def load_dog_image(
+    dog_state: str,
+    frame_path: Optional[Path] = None,
+    max_size: tuple[int, int] = (92, 72),
+) -> Image.Image:
     state = dog_state.upper()
 
     if frame_path and frame_path.exists():
@@ -86,8 +90,8 @@ def load_dog_image(dog_state: str, frame_path: Optional[Path] = None) -> Image.I
     if bbox:
         dog = dog.crop(bbox)
 
-    # Keep it larger than before
-    dog.thumbnail((92, 72))
+    # Keep it sized for the target dashboard area.
+    dog.thumbnail(max_size)
 
     # Convert to clean 1-bit for e-ink
     dog = dog.point(lambda p: 255 if p > 175 else 0).convert("1")
@@ -145,7 +149,92 @@ def render_dashboard(state: dict, frame_path: Optional[Path] = None) -> Image.Im
     dog_y = SCREEN_HEIGHT - dog.height - 4
     image.paste(dog, (dog_x, dog_y))
 
-    # Simple box around dog area
-    draw.rectangle((158, 42, 246, 118), outline=0)
+    # Dog area border disabled; it made the sprite feel boxed-in on the e-ink screen.
+    # draw.rectangle((158, 42, 246, 118), outline=0)
+
+    return image
+
+
+def render_fullscreen_animation(state: str, message: str = "", frame_path: Optional[Path] = None) -> Image.Image:
+    image = Image.new("1", (SCREEN_WIDTH, SCREEN_HEIGHT), 255)
+    draw = ImageDraw.Draw(image)
+
+    dog = load_dog_image(state, frame_path)
+    dog.thumbnail((150, 102))
+    dog_x = (SCREEN_WIDTH - dog.width) // 2
+    dog_y = 6 if message else (SCREEN_HEIGHT - dog.height) // 2
+    image.paste(dog, (dog_x, dog_y))
+
+    if message:
+        draw.text((6, SCREEN_HEIGHT - 15), safe_text(message, 34), font=FONT_SMALL, fill=0)
+
+    return image
+
+
+def wrap_text(text: str, font, max_width: int, max_lines: int) -> list[str]:
+    words = str(text or "").split()
+    lines: list[str] = []
+    current = ""
+
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        bbox = font.getbbox(candidate)
+        if bbox[2] - bbox[0] <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+        current = word
+
+        if len(lines) == max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    if lines and len(lines) == max_lines:
+        last = lines[-1]
+        while font.getbbox(last + "...")[2] - font.getbbox(last + "...")[0] > max_width and last:
+            last = last[:-1]
+        lines[-1] = (last + "...") if last != lines[-1] else lines[-1]
+
+    return lines
+
+
+def render_meeting_reminder(animation: dict, frame_path: Optional[Path] = None) -> Image.Image:
+    image = Image.new("1", (SCREEN_WIDTH, SCREEN_HEIGHT), 255)
+    draw = ImageDraw.Draw(image)
+
+    minutes = animation.get("minutes")
+    title = animation.get("title", "Meeting")
+
+    draw.text((4, 2), datetime.now().strftime("%H:%M"), font=FONT_TITLE, fill=0)
+    draw.text((195, 2), "ALBUS", font=FONT_TITLE, fill=0)
+    draw.line((4, 20, 246, 20), fill=0, width=1)
+
+    dog = load_dog_image("MEETING", frame_path, max_size=(122, 98))
+    dog_x = 4 + ((118 - dog.width) // 2)
+    dog_y = SCREEN_HEIGHT - dog.height - 2
+    image.paste(dog, (dog_x, dog_y))
+
+    text_x = 132
+    text_width = 112
+
+    draw.text((text_x, 27), "DONT", font=FONT_TITLE, fill=0)
+    draw.text((text_x, 43), "BE LATE", font=FONT_TITLE, fill=0)
+
+    if minutes is not None:
+        draw.text((text_x, 63), f"In {minutes} min", font=FONT_BOLD, fill=0)
+    else:
+        draw.text((text_x, 63), "Meeting soon", font=FONT_BOLD, fill=0)
+
+    y = 81
+    for line in wrap_text(title, FONT_SMALL, text_width, 3):
+        draw.text((text_x, y), line, font=FONT_SMALL, fill=0)
+        y += 12
 
     return image

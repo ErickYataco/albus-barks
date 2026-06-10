@@ -11,6 +11,9 @@ Albus Barks has two lightweight parts:
 
 ```text
 albus-barks/
+├── background/                       # Background jobs run by systemd timers
+│   └── calendar_sync.py              # One-shot / watch-mode Google Calendar sync
+│
 ├── web/                              # FastAPI CRUD app, API, templates, static files
 │   ├── main.py                       # FastAPI routes, HTML pages, API endpoints
 │   ├── crud.py                       # Task database operations and dog-state logic
@@ -201,6 +204,113 @@ The dashboard uses this response to decide:
 API state -> animator frame -> Pillow render -> e-ink display
 ```
 
+## Calendar meeting reminder
+
+Albus can treat Google Calendar meetings as calendar-backed tasks. When a meeting is within 15 minutes, the dashboard API returns a `MEETING` reminder directive. The dashboard briefly switches to a reminder screen with Albus talking and wagging his tail, a "DON'T BE LATE" message, the minutes remaining, and the meeting name. It then returns to the normal task dashboard and repeats periodically until the meeting start time. Once the meeting starts, Albus marks that calendar task as done.
+
+The active meeting reminder frames live in:
+
+```text
+resources/images/status/MEETING/
+```
+
+### Local meeting test
+
+With the web app running, create a calendar-style test task due within the next 15 minutes:
+
+```bash
+curl -X POST http://127.0.0.1:5582/api/calendar-test-task \
+  -F "title=Standup meeting" \
+  -F "due_time=2026-06-09T18:45"
+```
+
+Then run the simulator continuously:
+
+```bash
+python -m dashboard.main --simulate
+```
+
+Albus should briefly switch to the meeting reminder screen, then return to the regular task dashboard.
+
+### Google Calendar setup
+
+Google Calendar sync is handled by a background job, not by the web app or dashboard API.
+
+Install dependencies after pulling this feature:
+
+```bash
+pip install -r requirements.txt
+```
+
+Create Google OAuth credentials for a desktop app, then place the downloaded client secret at:
+
+```text
+config/google_credentials.json
+```
+
+Create or copy the OAuth token to:
+
+```text
+config/google_token.json
+```
+
+Both Google credential files are ignored by git.
+
+The Raspberry Pi installer requires both files before it installs/enables services:
+
+```text
+config/google_credentials.json
+config/google_token.json
+```
+
+If you keep them somewhere else, set these paths in `/etc/default/albus-barks` before rerunning the installer:
+
+```text
+ALBUS_GOOGLE_CALENDAR_ID=primary
+ALBUS_GOOGLE_CREDENTIALS_FILE=/home/albus/albus-barks/config/google_credentials.json
+ALBUS_GOOGLE_TOKEN_FILE=/home/albus/albus-barks/config/google_token.json
+```
+
+Calendar sync runs as its own systemd timer. It does not run inside the dashboard API. The timer invokes:
+
+```bash
+python -m background.calendar_sync
+```
+
+That command syncs once and exits. The installer creates `albus-barks-calendar-sync.timer`, which runs it every 5 minutes.
+
+For local Mac testing, keep the sync job running in the foreground:
+
+```bash
+python -m background.calendar_sync --watch --interval 300
+```
+
+For a one-time local sync:
+
+```bash
+python -m background.calendar_sync
+```
+
+The installer creates an optional environment file here:
+
+```text
+/etc/default/albus-barks
+```
+
+If you use a non-primary calendar, replace `primary` with that calendar ID.
+
+If you need to install temporarily without Google Calendar files, pass:
+
+```bash
+sudo REQUIRE_GOOGLE_CALENDAR=false ./install_albus_service.sh
+```
+
+Then add the files later and start the timer:
+
+```bash
+sudo systemctl start albus-barks-calendar-sync.timer
+```
+
 ## Image frames and animation
 
 Mood frames live in:
@@ -217,6 +327,7 @@ BARK
 HAPPY
 SLEEPY
 SAD
+MEETING
 ```
 
 Each folder can contain multiple frames:
@@ -247,6 +358,7 @@ The installer:
 
 - Creates and enables `albus-barks-web.service`.
 - Creates and enables `albus-barks-dashboard.service`.
+- Creates and enables `albus-barks-calendar-sync.timer` for Google Calendar sync every 5 minutes.
 - Clones or updates `https://github.com/ErickYataco/albus-barks.git` when needed.
 - Installs Raspberry Pi system packages for Python, Pillow, GPIOZero/LGPIO, GPIO, and SPI.
 - Enables SPI and I2C with `raspi-config nonint`.
@@ -286,6 +398,8 @@ The repo includes two service examples:
 ```text
 systemd-web.service.example
 systemd-dashboard.service.example
+systemd-calendar-sync.service.example
+systemd-calendar-sync.timer.example
 ```
 
 They are not active by default. To install them:
@@ -293,11 +407,15 @@ They are not active by default. To install them:
 ```bash
 sudo cp systemd-web.service.example /etc/systemd/system/albus-barks-web.service
 sudo cp systemd-dashboard.service.example /etc/systemd/system/albus-barks-dashboard.service
+sudo cp systemd-calendar-sync.service.example /etc/systemd/system/albus-barks-calendar-sync.service
+sudo cp systemd-calendar-sync.timer.example /etc/systemd/system/albus-barks-calendar-sync.timer
 sudo systemctl daemon-reload
 sudo systemctl enable albus-barks-web.service
 sudo systemctl enable albus-barks-dashboard.service
+sudo systemctl enable albus-barks-calendar-sync.timer
 sudo systemctl start albus-barks-web.service
 sudo systemctl start albus-barks-dashboard.service
+sudo systemctl start albus-barks-calendar-sync.timer
 ```
 
 Check status:
@@ -305,6 +423,7 @@ Check status:
 ```bash
 sudo systemctl status albus-barks-web.service
 sudo systemctl status albus-barks-dashboard.service
+sudo systemctl status albus-barks-calendar-sync.timer
 ```
 
 View logs:
@@ -312,6 +431,7 @@ View logs:
 ```bash
 journalctl -u albus-barks-web.service -f
 journalctl -u albus-barks-dashboard.service -f
+journalctl -u albus-barks-calendar-sync.service -f
 ```
 
 If your project is not in `/home/albus/albus-barks`, update `WorkingDirectory` and `ExecStart` inside both service files, or run the installer with `ALBUS_PATH=/your/path`.

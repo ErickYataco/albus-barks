@@ -4,6 +4,7 @@ After=network-online.target albus-barks-web.service
 Wants=network-online.target albus-barks-web.service
 
 [Service]
+EnvironmentFile=-/etc/default/albus-barks
 WorkingDirectory=/home/albus/albus-barks
 ExecStart=/home/albus/albus-barks/.venv/bin/python -m dashboard.main
 Restart=always

@@ -12,9 +12,9 @@ class Animator:
     def _frames_for_state(self, state: str) -> list[Path]:
         state = state.upper()
         folder = self.base_dir / state
-        frames = sorted(folder.glob("*.png"))
+        frames = sorted(path for path in folder.glob("*.png") if not path.name.startswith("_"))
         if not frames:
-            frames = sorted((self.base_dir / "IDLE").glob("*.png"))
+            frames = sorted(path for path in (self.base_dir / "IDLE").glob("*.png") if not path.name.startswith("_"))
         return frames
 
     def next_frame(self, state: str) -> Path | None:

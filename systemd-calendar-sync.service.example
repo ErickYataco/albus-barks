@@ -1,0 +1,13 @@
+[Unit]
+Description=Albus Barks Google Calendar Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/albus-barks
+WorkingDirectory=/home/albus/albus-barks
+ExecStart=/home/albus/albus-barks/.venv/bin/python -m background.calendar_sync
+StandardOutput=journal
+StandardError=journal
+User=albus

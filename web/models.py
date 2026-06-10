@@ -22,5 +22,12 @@ class Task(Base):
     done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
 
+    source: Mapped[str] = mapped_column(String(40), default="manual", index=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reminder_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_reminder_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reminder_count: Mapped[int] = mapped_column(Integer, default=0)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

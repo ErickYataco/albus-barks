@@ -28,10 +28,14 @@ UPDATE_REPO="${UPDATE_REPO:-true}"
 SKIP_APT="${SKIP_APT:-false}"
 CONFIGURE_INTERFACES="${CONFIGURE_INTERFACES:-true}"
 CONFLICTS_SERVICE="${CONFLICTS_SERVICE:-}"
+REQUIRE_GOOGLE_CALENDAR="${REQUIRE_GOOGLE_CALENDAR:-true}"
 
 WEB_SERVICE="${SERVICE_PREFIX}-web.service"
 DASHBOARD_SERVICE="${SERVICE_PREFIX}-dashboard.service"
+CALENDAR_SYNC_SERVICE="${SERVICE_PREFIX}-calendar-sync.service"
+CALENDAR_SYNC_TIMER="${SERVICE_PREFIX}-calendar-sync.timer"
 KILL_PORT_SCRIPT="${ALBUS_PATH}/kill_port_${WEB_PORT}.sh"
+ENV_FILE="/etc/default/${SERVICE_PREFIX}"
 
 log() {
     local level=$1
@@ -86,6 +90,42 @@ setup_user() {
             log "WARNING" "Group ${group} not found; skipping"
         fi
     done
+}
+
+load_env_file() {
+    if [ -f "${ENV_FILE}" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        . "${ENV_FILE}"
+        set +a
+    fi
+}
+
+require_google_calendar_files() {
+    load_env_file
+
+    if [ "${REQUIRE_GOOGLE_CALENDAR}" != "true" ]; then
+        log "WARNING" "Google Calendar file check skipped because REQUIRE_GOOGLE_CALENDAR=false"
+        return 0
+    fi
+
+    local credentials_file="${ALBUS_GOOGLE_CREDENTIALS_FILE:-${ALBUS_PATH}/config/google_credentials.json}"
+    local token_file="${ALBUS_GOOGLE_TOKEN_FILE:-${ALBUS_PATH}/config/google_token.json}"
+
+    if [ ! -f "${credentials_file}" ]; then
+        log "ERROR" "Missing Google credentials file: ${credentials_file}"
+        log "ERROR" "Copy it into place or set ALBUS_GOOGLE_CREDENTIALS_FILE in ${ENV_FILE}, then rerun the installer."
+        exit 1
+    fi
+
+    if [ ! -f "${token_file}" ]; then
+        log "ERROR" "Missing Google token file: ${token_file}"
+        log "ERROR" "Create/copy the token before installing services, or set ALBUS_GOOGLE_TOKEN_FILE in ${ENV_FILE}."
+        exit 1
+    fi
+
+    log "SUCCESS" "Google Calendar credentials found: ${credentials_file}"
+    log "SUCCESS" "Google Calendar token found: ${token_file}"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -146,6 +186,18 @@ EOF
 chmod +x "${KILL_PORT_SCRIPT}"
 chown "${ALBUS_USER}:${ALBUS_USER}" "${KILL_PORT_SCRIPT}"
 
+if [ ! -f "${ENV_FILE}" ]; then
+    cat > "${ENV_FILE}" << EOF
+# Albus Barks service configuration.
+# Google Calendar credentials and token must exist before services are installed.
+# ALBUS_GOOGLE_CALENDAR_ID=primary
+# ALBUS_GOOGLE_CREDENTIALS_FILE=${ALBUS_PATH}/config/google_credentials.json
+# ALBUS_GOOGLE_TOKEN_FILE=${ALBUS_PATH}/config/google_token.json
+EOF
+fi
+
+require_google_calendar_files
+
 CONFLICTS_LINE=""
 if [ -n "${CONFLICTS_SERVICE}" ]; then
     CONFLICTS_LINE="Conflicts=${CONFLICTS_SERVICE}"
@@ -159,6 +211,7 @@ Wants=network-online.target
 ${CONFLICTS_LINE}
 
 [Service]
+EnvironmentFile=-${ENV_FILE}
 ExecStart=${UVICORN_BIN} web.main:app --host 0.0.0.0 --port ${WEB_PORT}
 WorkingDirectory=${ALBUS_PATH}
 StandardOutput=inherit
@@ -178,6 +231,7 @@ Wants=network-online.target ${WEB_SERVICE}
 ${CONFLICTS_LINE}
 
 [Service]
+EnvironmentFile=-${ENV_FILE}
 ExecStart=${PYTHON_BIN} -m dashboard.main
 WorkingDirectory=${ALBUS_PATH}
 StandardOutput=inherit
@@ -189,18 +243,50 @@ User=${ALBUS_USER}
 WantedBy=multi-user.target
 EOF
 
+cat > "/etc/systemd/system/${CALENDAR_SYNC_SERVICE}" << EOF
+[Unit]
+Description=Albus Barks Google Calendar Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-${ENV_FILE}
+ExecStart=${PYTHON_BIN} -m background.calendar_sync
+WorkingDirectory=${ALBUS_PATH}
+StandardOutput=journal
+StandardError=journal
+User=${ALBUS_USER}
+EOF
+
+cat > "/etc/systemd/system/${CALENDAR_SYNC_TIMER}" << EOF
+[Unit]
+Description=Run Albus Barks Google Calendar Sync Every 5 Minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=${CALENDAR_SYNC_SERVICE}
+
+[Install]
+WantedBy=timers.target
+EOF
+
 run chown -R "${ALBUS_USER}:${ALBUS_USER}" "${ALBUS_PATH}"
 run systemctl daemon-reload
 run systemctl enable "${WEB_SERVICE}"
 run systemctl enable "${DASHBOARD_SERVICE}"
+run systemctl enable "${CALENDAR_SYNC_TIMER}"
 
 log "SUCCESS" "Installed and enabled:"
 echo "  ${WEB_SERVICE}"
 echo "  ${DASHBOARD_SERVICE}"
+echo "  ${CALENDAR_SYNC_TIMER}"
 echo
 echo "Start them with:"
 echo "  sudo systemctl start ${WEB_SERVICE}"
 echo "  sudo systemctl start ${DASHBOARD_SERVICE}"
+echo "  sudo systemctl start ${CALENDAR_SYNC_TIMER}"
 echo
 echo "If another app owns port ${WEB_PORT} or the Waveshare EPD, stop it first."
 echo "For Bjorn, run: sudo systemctl stop bjorn.service"
