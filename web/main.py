@@ -1,20 +1,21 @@
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from background.config import load_alert_config
 from . import crud
 from .database import get_session, init_db
-from .models import Task
 
 BASE_DIR = Path(__file__).resolve().parent
+PAGE_SIZE = 10
+MAX_SOURCE_RUNS = 50
 
-app = FastAPI(title="Albus Barks", version="0.1.0")
+app = FastAPI(title="Albus Barks", version="0.2.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -26,24 +27,22 @@ def parse_form_datetime(value: str) -> datetime | None:
         return None
 
 
-def html_datetime(value: datetime | None) -> str:
-    if not value:
-        return ""
-    return value.strftime("%Y-%m-%dT%H:%M")
-
-
 def pretty_datetime(value: datetime | None) -> str:
     if not value:
         return ""
     return value.strftime("%b %d, %Y %I:%M %p")
 
 
-def redirect_to(path: str) -> RedirectResponse:
-    return RedirectResponse(path, status_code=status.HTTP_303_SEE_OTHER)
-
-
-templates.env.filters["html_datetime"] = html_datetime
 templates.env.filters["pretty_datetime"] = pretty_datetime
+
+
+def notification_config() -> dict:
+    return load_alert_config().get("notifications", {})
+
+
+def alert_repeat_minutes() -> int:
+    config = notification_config()
+    return int(config.get("job_reminder_repeat_minutes", 5))
 
 
 @app.on_event("startup")
@@ -52,181 +51,125 @@ def on_startup() -> None:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, filter: str = "active", session: Session = Depends(get_session)):
-    tasks = crud.list_tasks(session, filter)
-    all_tasks = list(session.execute(select(Task)).scalars().all())
-    counts = crud.count_tasks(session)
-    dog_state, message = crud.dog_state_for_tasks(all_tasks)
+def index(
+    request: Request,
+    view: str = "alerts",
+    filter: str = "active",
+    page: int = 1,
+    session: Session = Depends(get_session),
+):
+    view = view if view in {"alerts", "sources"} else "alerts"
+    page = max(1, page)
+
+    alert_total = crud.count_alerts_for_filter(session, filter)
+    run_total = crud.count_runs(session, max_items=MAX_SOURCE_RUNS)
+    total_items = alert_total if view == "alerts" else run_total
+    total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, total_pages)
+    offset = (page - 1) * PAGE_SIZE
+
+    alerts = crud.list_alerts(session, filter, limit=PAGE_SIZE, offset=offset) if view == "alerts" else []
+    runs = crud.latest_runs(session, limit=PAGE_SIZE, offset=offset) if view == "sources" and offset < MAX_SOURCE_RUNS else []
+    active_alerts = crud.dashboard_alerts(session, limit=20)
+    counts = crud.count_alerts(session)
+    dog_state, message = crud.dog_state_for_alerts(active_alerts)
 
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "tasks": [{"task": task, "status": crud.task_status(task)} for task in tasks],
+            "alerts": [{"alert": alert, "status": crud.alert_status(alert)} for alert in alerts],
+            "runs": runs,
             "counts": counts,
+            "view": view,
             "filter_value": filter,
+            "page": page,
+            "page_size": PAGE_SIZE,
+            "total_items": total_items,
+            "total_pages": total_pages,
             "dog_state": dog_state,
             "message": message,
         },
     )
 
 
-@app.get("/tasks/new", response_class=HTMLResponse)
-def new_task(request: Request):
-    return templates.TemplateResponse(
-        "task_form.html",
-        {"request": request, "mode": "create", "task": None, "error": None},
-    )
+@app.get("/api/alerts")
+def api_alerts(filter: str = "active", session: Session = Depends(get_session)):
+    return [crud.alert_to_api(alert) for alert in crud.list_alerts(session, filter)]
 
 
-@app.post("/tasks/new")
-def create_task(
-    title: str = Form(...),
-    description: str = Form(""),
-    due_time: str = Form(...),
-    session: Session = Depends(get_session),
-):
-    parsed_due_time = parse_form_datetime(due_time)
-    if not title.strip() or not parsed_due_time:
-        return redirect_to("/tasks/new?error=invalid")
-
-    crud.create_task(
-        session=session,
-        title=title.strip(),
-        description=description.strip() or None,
-        due_time=parsed_due_time,
-    )
-    return redirect_to("/")
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def api_acknowledge_alert(alert_id: int, session: Session = Depends(get_session)):
+    alert = crud.acknowledge_alert(session, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return crud.alert_to_api(alert)
 
 
-@app.get("/tasks/{task_id}", response_class=HTMLResponse)
-def task_detail(task_id: int, request: Request, session: Session = Depends(get_session)):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+@app.post("/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: int, request: Request, session: Session = Depends(get_session)):
+    alert = crud.acknowledge_alert(session, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
 
-    return templates.TemplateResponse(
-        "task_detail.html",
-        {"request": request, "task": task, "status": crud.task_status(task)},
-    )
+    referer = request.headers.get("referer") or "/"
+    return RedirectResponse(referer, status_code=303)
 
 
-@app.get("/tasks/{task_id}/edit", response_class=HTMLResponse)
-def edit_task_form(task_id: int, request: Request, session: Session = Depends(get_session)):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    return templates.TemplateResponse(
-        "task_form.html",
-        {"request": request, "mode": "edit", "task": task, "error": None},
-    )
-
-
-@app.post("/tasks/{task_id}/edit")
-def edit_task(
-    task_id: int,
-    title: str = Form(...),
-    description: str = Form(""),
-    due_time: str = Form(...),
-    session: Session = Depends(get_session),
-):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    parsed_due_time = parse_form_datetime(due_time)
-    if not title.strip() or not parsed_due_time:
-        return redirect_to(f"/tasks/{task_id}/edit")
-
-    crud.update_task(session, task, title.strip(), description.strip() or None, parsed_due_time)
-    return redirect_to(f"/tasks/{task_id}")
-
-
-@app.post("/tasks/{task_id}/toggle")
-def toggle_task(task_id: int, session: Session = Depends(get_session)):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    crud.toggle_task(session, task)
-    return redirect_to("/")
-
-
-@app.post("/tasks/{task_id}/delete")
-def delete_task(task_id: int, session: Session = Depends(get_session)):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    crud.delete_task(session, task)
-    return redirect_to("/")
-
-
-@app.get("/api/tasks")
-def api_tasks(session: Session = Depends(get_session)):
-    tasks = list(
-        session.execute(
-            select(Task).order_by(Task.done.asc(), Task.due_time.asc())
-        ).scalars().all()
-    )
-    return [crud.task_to_api(task) for task in tasks]
-
-
-@app.post("/api/calendar-test-task")
-def api_calendar_test_task(
+@app.post("/api/test-alert")
+def api_test_alert(
     title: str = Form("Calendar test meeting"),
-    due_time: str = Form(...),
+    starts_at: str = Form(...),
     session: Session = Depends(get_session),
 ):
-    parsed_due_time = parse_form_datetime(due_time)
-    if not parsed_due_time:
-        raise HTTPException(status_code=400, detail="Invalid due_time. Use YYYY-MM-DDTHH:MM.")
+    parsed_starts_at = parse_form_datetime(starts_at)
+    if not parsed_starts_at:
+        raise HTTPException(status_code=400, detail="Invalid starts_at. Use YYYY-MM-DDTHH:MM.")
 
-    task = crud.upsert_calendar_task(
+    alert = crud.upsert_calendar_alert(
         session=session,
-        external_id=f"local-test-{parsed_due_time.isoformat()}-{title}",
+        external_id=f"local-test-{parsed_starts_at.isoformat()}-{title}",
         title=title,
-        due_time=parsed_due_time,
-        description="Local calendar animation test",
+        starts_at=parsed_starts_at,
+        description="Local alert animation test",
     )
-    return crud.task_to_api(task)
+    return crud.alert_to_api(alert)
 
 
 @app.get("/api/dashboard-state")
 def api_dashboard_state(session: Session = Depends(get_session)):
-    crud.mark_started_calendar_tasks_done(session)
+    crud.expire_started_meeting_alerts(session)
 
-    all_tasks = list(session.execute(select(Task)).scalars().all())
-    tasks = crud.dashboard_tasks(session, limit=3)
+    active_alerts = crud.dashboard_alerts(session, limit=3)
+    dog_state, message = crud.dog_state_for_alerts(active_alerts)
 
-    dog_state, message = crud.dog_state_for_tasks(all_tasks)
-    overlay_animation = crud.reminder_overlay_for_meeting(crud.meeting_task_for_reminder(session))
-    if overlay_animation:
+    overlay_animations = []
+    meeting_overlay = crud.reminder_overlay_for_meeting(crud.meeting_alert_for_reminder(session))
+    if meeting_overlay:
+        overlay_animations.append(meeting_overlay)
+
+    job_overlay = crud.reminder_overlay_for_job(
+        crud.job_alert_for_reminder(
+            session,
+            repeat_minutes=alert_repeat_minutes(),
+        )
+    )
+    if job_overlay:
+        overlay_animations.append(job_overlay)
+
+    if overlay_animations:
         session.commit()
 
     return {
         "dog_state": dog_state,
         "message": message,
-        "counts": crud.count_tasks(session),
-        "overlay_animation": overlay_animation,
-        "tasks": [
-            {
-                "id": task.id,
-                "title": task.title,
-                "due_time": task.due_time.isoformat(),
-                "done": task.done,
-                "status": crud.task_status(task),
-            }
-            for task in tasks
-        ],
+        "counts": crud.count_alerts(session),
+        "overlay_animation": overlay_animations[0] if overlay_animations else None,
+        "overlay_animations": overlay_animations,
+        "alerts": [crud.alert_to_api(alert) for alert in active_alerts],
     }
 
 
-@app.post("/api/tasks/{task_id}/toggle")
-def api_toggle_task(task_id: int, session: Session = Depends(get_session)):
-    task = crud.get_task(session, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    updated = crud.toggle_task(session, task)
-    return crud.task_to_api(updated)
+@app.get("/api/source-runs")
+def api_source_runs(session: Session = Depends(get_session)):
+    return [crud.run_to_api(run) for run in crud.latest_runs(session, limit=50)]

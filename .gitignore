@@ -23,6 +23,7 @@ runtime/*
 .env.*
 config/google_credentials.json
 config/google_token.json
+config/alerts.json
 
 # Logs
 *.log

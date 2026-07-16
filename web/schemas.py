@@ -4,18 +4,21 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class TaskRead(BaseModel):
+class AlertRead(BaseModel):
     id: int
+    alert_type: str
+    source: str
+    external_id: str
     title: str
     description: Optional[str]
-    due_time: datetime
-    due_time_short: str
-    done: bool
-    completed_at: Optional[datetime]
+    url: Optional[str]
+    starts_at: Optional[datetime]
     status: str
+    severity: str
+    score: int
 
 
 class DashboardState(BaseModel):
     dog_state: str
     message: str
-    tasks: list[TaskRead]
+    alerts: list[AlertRead]

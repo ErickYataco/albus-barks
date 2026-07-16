@@ -4,23 +4,44 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Albus Barks</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,400,0,0">
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=dog-no-circle-20260710">
 </head>
 <body>
-    <div class="app-shell">
-        <header class="topbar">
+    <header class="topbar">
+        <div class="topbar-inner">
+            <button class="icon-button menu-button" type="button" aria-label="Menu">
+                <span class="material-symbols-outlined">menu</span>
+            </button>
+
             <a href="/" class="brand">
-                <span class="brand-icon">🐶</span>
+                <span class="brand-icon">
+                    <img src="/static/albus_preview.png" alt="Albus">
+                </span>
                 <span>
                     <strong>Albus Barks</strong>
-                    <small>Tamagotchi-style task companion</small>
+                    <small>E-ink alert companion</small>
                 </span>
             </a>
-            <nav>
-                <a href="/">Tasks</a>
-                <a href="/tasks/new" class="button button-primary">+ New Task</a>
+
+            <nav class="top-nav">
+                <a class="nav-link {{ 'active' if view | default('alerts') == 'alerts' else '' }}" href="/?view=alerts">
+                    <span class="material-symbols-outlined">notifications</span>
+                    <span>Alerts</span>
+                </a>
+                <a class="nav-link {{ 'active' if view | default('alerts') == 'sources' else '' }}" href="/?view=sources">
+                    <span class="material-symbols-outlined">list_alt</span>
+                    <span>Sources</span>
+                </a>
+                <a class="nav-link" href="/api/dashboard-state">
+                    <span class="material-symbols-outlined">monitor_heart</span>
+                    <span>API State</span>
+                </a>
             </nav>
-        </header>
+        </div>
+    </header>
+
+    <div class="app-shell">
         <main>{% block content %}{% endblock %}</main>
     </div>
 </body>

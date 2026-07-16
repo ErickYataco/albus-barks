@@ -13,5 +13,5 @@ def fallback_state(message: str = "API offline") -> dict:
     return {
         "dog_state": "SAD",
         "message": message,
-        "tasks": [],
+        "alerts": [],
     }

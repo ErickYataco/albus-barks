@@ -5,7 +5,7 @@ import time
 from .animator import Animator
 from .client import fallback_state, fetch_dashboard_state
 from .config import ALERT_REFRESH_SECONDS, API_URL, REFRESH_SECONDS
-from .display import render_dashboard, render_fullscreen_animation, render_meeting_reminder
+from .display import render_dashboard, render_fullscreen_animation, render_job_reminder, render_meeting_reminder
 from .epd_driver import get_display
 
 _running = True
@@ -34,8 +34,10 @@ def run(api_url: str, once: bool = False, simulate: bool = False) -> None:
                 state = fallback_state(f"API offline: {api_url}")
 
             dog_state = state.get("dog_state", "IDLE")
-            overlay_animation = state.get("overlay_animation")
-            if overlay_animation:
+            overlay_animations = state.get("overlay_animations") or []
+            if not overlay_animations and state.get("overlay_animation"):
+                overlay_animations = [state.get("overlay_animation")]
+            for overlay_animation in overlay_animations:
                 play_overlay_animation(epd, animator, overlay_animation)
 
             frame = animator.next_frame(dog_state)
@@ -60,17 +62,19 @@ def play_overlay_animation(epd, animator: Animator, animation: dict) -> None:
         mode == "meeting_reminder"
         or state == "MEETING"
         or "minutes" in animation
-        or "task_id" in animation
         or str(message).lower().startswith("don't be late")
         or str(message).lower().startswith("dont be late")
     )
+    is_job_reminder = mode == "job_reminder"
 
     for _ in range(max(1, repeat)):
         for _frame_number in range(5):
-            frame_state = "MEETING" if is_meeting_reminder else state
+            frame_state = "MEETING" if is_meeting_reminder else "BARK" if is_job_reminder else state
             frame = animator.next_frame(frame_state)
             if is_meeting_reminder:
                 image = render_meeting_reminder(animation, frame)
+            elif is_job_reminder:
+                image = render_job_reminder(animation, frame)
             else:
                 image = render_fullscreen_animation(state, message, frame)
             epd.display(image)

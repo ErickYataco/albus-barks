@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Albus Barks Bright Data LinkedIn Job Sync Every 2 Days
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2d
+Unit=albus-barks-job-sync.service
+
+[Install]
+WantedBy=timers.target

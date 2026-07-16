@@ -1,101 +1,226 @@
 # Albus Barks
 
-A Tamagotchi-style e-ink dog assistant for Raspberry Pi that barks for reminders and celebrates completed tasks.
+Albus Barks is a Raspberry Pi e-ink alert companion. Instead of being a task list app, the project is moving toward one focused job: watch configured sources and show useful alerts on the Waveshare display when something deserves attention.
 
-Albus Barks has two lightweight parts:
+The first alert sources are:
 
-- **Web CRUD app**: FastAPI + SQLAlchemy ORM + SQLite + Jinja UI for adding, editing, deleting, and completing tasks.
-- **E-ink dashboard**: Python + Pillow renderer for a 2.13-inch Waveshare e-Paper display. It reads task state from the API and shows animated Albus mood frames.
+- Google Calendar meetings.
+- LinkedIn job matches through Bright Data.
+
+The web app becomes a small configuration and status surface. The Raspberry Pi dashboard becomes the main experience.
+
+## Suggested version
+
+Recommended branch/version for this rewrite:
+
+```text
+0.2.0-alpha.0
+```
+
+Why:
+
+- `0.1.x` was the task-list prototype.
+- `0.2.0-alpha.0` is the alert-first rewrite while the APIs, database shape, and dashboard behavior are still changing.
+- `0.2.0` should be used once calendar alerts, Bright Data job alerts, and the dashboard queue are working end to end.
+
+This is a product direction change, but the project is still pre-`1.0.0`, so a minor version bump is enough.
+
+## New product direction
+
+Albus should answer one question all day:
+
+```text
+What should Erick pay attention to now?
+```
+
+The app should not ask the user to maintain a manual task list. Instead, background jobs collect signals from configured sources, normalize them into alerts, and the dashboard decides what to show.
+
+### Alert types
+
+| Alert type | Source | What Albus shows |
+|---|---|---|
+| Meeting | Google Calendar | Meeting name, minutes remaining, "don't be late" reminder, talking/wagging Albus animation |
+| Job match | Bright Data LinkedIn jobs feed | Role title, company, location/remote mode, match reason |
 
 ## Project layout
 
 ```text
 albus-barks/
-├── background/                       # Background jobs run by systemd timers
-│   └── calendar_sync.py              # One-shot / watch-mode Google Calendar sync
+├── background/                       # Background sync jobs and alert collectors
+│   ├── calendar_sync.py              # Google Calendar meeting sync
+│   └── job_sync.py                   # Bright Data LinkedIn job sync
 │
-├── web/                              # FastAPI CRUD app, API, templates, static files
-│   ├── main.py                       # FastAPI routes, HTML pages, API endpoints
-│   ├── crud.py                       # Task database operations and dog-state logic
+├── web/                              # FastAPI admin/status app
+│   ├── main.py                       # Status pages and API endpoints
+│   ├── crud.py                       # Alert persistence helpers
 │   ├── database.py                   # SQLite engine/session setup
-│   ├── models.py                     # SQLAlchemy Task model
-│   ├── schemas.py                    # Optional API schemas / DTOs
-│   ├── templates/                    # Jinja HTML templates
+│   ├── models.py                     # Alert, source, and run models
+│   ├── schemas.py                    # API schemas / DTOs
+│   ├── templates/                    # Configuration/status UI
 │   └── static/                       # CSS and web-only static assets
 │
 ├── dashboard/                        # E-ink dashboard process
-│   ├── main.py                       # Dashboard loop: fetch API, render frame, display it
-│   ├── client.py                     # HTTP client for /api/dashboard-state
+│   ├── main.py                       # Fetches alert state, renders frames, updates display
+│   ├── client.py                     # HTTP client for dashboard state
 │   ├── display.py                    # Pillow render logic for 250x122 screen
-│   ├── animator.py                   # Selects the next mood frame per state
+│   ├── animator.py                   # Selects Albus animation frames
 │   ├── config.py                     # Paths, display size, API URL, refresh intervals
 │   └── epd_driver.py                 # Waveshare driver wrapper + simulator fallback
 │
+├── config/
+│   ├── alerts.example.json           # Example source/job configuration
+│   ├── google_credentials.json       # Local-only Google OAuth client file
+│   └── google_token.json             # Local-only Google OAuth token file
+│
 ├── resources/
 │   └── images/
-│       └── status/                   # Albus mood animation frames
-│           ├── IDLE/                 # 1.png ... 5.png
-│           ├── BARK/                 # 1.png ... 5.png
-│           ├── HAPPY/                # 1.png ... 5.png
-│           ├── SLEEPY/               # 1.png ... 5.png
-│           └── SAD/                  # 1.png ... 5.png
+│       └── status/                   # Albus animation frames
 │
-├── data/                             # SQLite database: tasks.db
-├── runtime/                          # Simulator output: last_render.png
+├── data/                             # SQLite database
+├── runtime/                          # Simulator output
 ├── requirements.txt                  # Python dependencies
 ├── install_albus_service.sh          # Raspberry Pi systemd installer
-├── kill_port_5582.sh                 # Helper used by the web systemd service
-├── systemd-web.service.example       # Example Linux service for the web app
-└── systemd-dashboard.service.example # Example Linux service for the e-ink dashboard
+├── uninstall_albus_service.sh        # Removes Albus systemd services/timers
+└── systemd-*.example                 # Example Linux service/timer units
 ```
 
-## Hardware target
+Some files above are the target shape for this branch. The first alert-first refactor is in place: `Alert` and `AlertRun` replace task storage, the dashboard API returns alerts, and the web UI is an alert/status console.
 
-- Raspberry Pi Zero 2 WH
-- Waveshare 2.13-inch e-Paper HAT
-- Tested layout size: `250x122`
-- Python 3.10+ recommended
+## Configuration-first jobs
 
-The dashboard can also run in simulator mode on macOS/Linux. In simulator mode, it saves the latest render here:
+All alert sources should run from configuration. The project should be useful without code edits when search terms, thresholds, or schedules change.
 
-```text
-runtime/last_render.png
+Example:
+
+```json
+{
+  "calendar": {
+    "enabled": true,
+    "calendar_id": "primary",
+    "reminder_minutes": 15,
+    "repeat_minutes": 5
+  },
+  "linkedin_jobs": {
+    "enabled": true,
+    "provider": "bright_data",
+    "openai_relevance": {
+      "enabled": true,
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-4.1-mini",
+      "min_score": 70,
+      "max_jobs_to_score": 5,
+      "batch_size": 10,
+      "system_prompt": "You score LinkedIn jobs for a candidate. Use candidate_profile and objective as the primary relevance criteria. Return structured results. Each result must include index, score from 0 to 100, include boolean, severity as info or high, and reason. Set include=true only when score is at least minimum_alert_score.",
+      "objective": "Find remote full-time DevOps, SRE, platform engineering, Kubernetes, cloud infrastructure, and automation roles that are realistic for a candidate in Peru or Latin America.",
+      "profile": "Senior DevOps / platform engineer interested in remote roles, Kubernetes, CI/CD, Linux, cloud infrastructure, automation, observability, and reliability engineering."
+    },
+    "exclude_companies": [],
+    "searches": [
+      {
+        "keyword": "platform engineer",
+        "location": "United States",
+        "country": "US",
+        "remote": "Remote",
+        "job_type": "Full-time",
+        "experience_level": "Mid-Senior level",
+        "time_range": "Past week"
+      }
+    ],
+    "bright_data": {
+      "api_token_env": "BRIGHT_DATA_API_TOKEN",
+      "api_url": "https://api.brightdata.com/datasets/v3/trigger",
+      "snapshot_url": "https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}?format=json",
+      "limit_per_input": 10,
+      "dataset_id": "gd_lpfll7v5hcqtkxl6l",
+      "collector_id": "",
+      "request_mode": "discover_by_keyword",
+      "timeout_seconds": 180,
+      "snapshot_timeout_seconds": 900,
+      "snapshot_poll_interval_seconds": 15
+    }
+  },
+  "notifications": {
+    "job_reminder_repeat_minutes": 5
+  }
+}
 ```
 
-## What each main file does
+Secrets must stay outside git. Use environment variables or local files ignored by `.gitignore`.
 
-### Web app
+## Google Calendar alerts
 
-| File | Purpose |
-|---|---|
-| `web/main.py` | Main FastAPI app. Defines HTML routes, task actions, and API endpoints like `/api/dashboard-state`. |
-| `web/crud.py` | Contains task database operations and logic that decides Albus mood: `IDLE`, `BARK`, `HAPPY`, `SLEEPY`, or `SAD`. |
-| `web/database.py` | Creates the SQLite connection and SQLAlchemy session. |
-| `web/models.py` | Defines the `Task` table using SQLAlchemy ORM. |
-| `web/templates/index.html` | Main task dashboard UI. Shows tasks, counts, and Albus mood card. |
-| `web/static/styles.css` | Styling for the web CRUD UI. |
+Calendar sync should run as a background job, not inside the web request path.
 
-### E-ink dashboard
+Expected behavior:
 
-| File | Purpose |
-|---|---|
-| `dashboard/main.py` | Main dashboard loop. Fetches state from the API, chooses the next animation frame, renders the screen, and sends it to the display. |
-| `dashboard/client.py` | Calls the web API. If the API is offline, it returns a fallback state. |
-| `dashboard/animator.py` | Cycles through image frames in `resources/images/status/<STATE>/`. |
-| `dashboard/display.py` | Uses Pillow to create the final 250x122 black-and-white e-ink image. |
-| `dashboard/epd_driver.py` | Uses the real Waveshare display when available, otherwise saves `runtime/last_render.png`. |
-| `dashboard/config.py` | Central place for paths, API URL, refresh intervals, and display dimensions. |
+- Sync upcoming meetings from Google Calendar.
+- Create or update meeting alerts.
+- When a meeting is within `reminder_minutes`, show a full-screen reminder.
+- Repeat the reminder every `repeat_minutes` until the meeting starts.
+- After the meeting starts, expire or complete the alert automatically.
 
-### Systemd files
+The dashboard reminder should prioritize clarity:
 
-| File | Purpose |
-|---|---|
-| `systemd-web.service.example` | Runs the FastAPI web app automatically when the Raspberry Pi boots. |
-| `systemd-dashboard.service.example` | Runs the e-ink dashboard automatically when the Raspberry Pi boots. |
+- Albus animation on the left half of the display.
+- Meeting message on the right half of the display.
+- Meeting title and minutes remaining.
+- Return to the normal dashboard after the reminder animation.
 
-These files are examples. You copy them into `/etc/systemd/system/`, adjust paths/user if needed, then enable them.
+## Bright Data LinkedIn jobs
 
-## Quick start on laptop/macOS
+The project should not scrape LinkedIn directly. LinkedIn job discovery should use Bright Data as the data provider.
+
+Target behavior:
+
+- Run on a configured interval.
+- Discover jobs from the Bright Data LinkedIn Jobs discover-by-keyword API.
+- Use configured `searches` as keyword/location inputs.
+- Filter Bright Data error rows and score usable jobs with OpenAI relevance.
+- Deduplicate by stable external ID or job URL.
+- Create an alert only when a job crosses `openai_relevance.min_score`.
+- Notify once per job unless the job changes meaningfully.
+
+The current config uses Bright Data dataset `gd_lpfll7v5hcqtkxl6l` with `type=discover_new` and `discover_by=keyword`, so it searches for new jobs from keyword/location inputs.
+
+Real-time Bright Data requests can take longer than a normal API call because the scraper is collecting the page before returning the response. The example config uses `timeout_seconds: 180`, which is better for small 1 to 10 URL runs. Larger batches should use Bright Data's async batch collection or push delivery flow instead of keeping one HTTP request open.
+
+Suggested scoring signals:
+
+- Role title and description match `openai_relevance.objective`.
+- Required skills fit `openai_relevance.profile`.
+- Location or remote mode is realistic for the candidate profile.
+- Company is not excluded.
+- Posted date is recent.
+- Seniority matches the target profile.
+
+`openai_relevance.max_jobs_to_score` limits the total jobs sent to OpenAI in one sync. `openai_relevance.batch_size` only controls how many jobs are sent per OpenAI request.
+
+## Dashboard behavior
+
+The dashboard should render the highest priority active alert.
+
+Suggested priority:
+
+1. Meeting starting soon.
+2. New high-score job match.
+3. Idle status.
+
+Alert screens should be short and readable on the 2.13-inch e-ink display. The display is not a video screen, so use slow, purposeful animation frames.
+
+## Web app role
+
+The web app should become an admin/status console:
+
+- Show active alerts.
+- Show last sync time for each source.
+- Show last sync error.
+- Show current configuration summary.
+- Allow manual "sync now" commands.
+- Allow dismissing or acknowledging an alert.
+
+It should no longer be a manual task CRUD app.
+
+## Local development
 
 ```bash
 cd albus-barks
@@ -104,272 +229,147 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Terminal 1 — run the web app:
+Run the web app:
 
 ```bash
 uvicorn web.main:app --host 0.0.0.0 --port 5582 --reload
 ```
 
-Open:
-
-```text
-http://localhost:5582
-```
-
-Terminal 2 — render the e-ink simulator once:
+Run the dashboard simulator once:
 
 ```bash
-source .venv/bin/activate
 python -m dashboard.main --once --simulate
 open runtime/last_render.png
 ```
 
-Continuous simulator mode:
+Run the dashboard simulator continuously:
 
 ```bash
 python -m dashboard.main --simulate
 ```
 
-## Quick start on Raspberry Pi
-
-```bash
-sudo apt update
-sudo apt install -y python3-venv python3-pip libopenjp2-7 libtiff5
-
-cd albus-barks
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Terminal 1 — run the web app:
-
-```bash
-uvicorn web.main:app --host 0.0.0.0 --port 5582
-```
-
-Terminal 2 — run the dashboard:
-
-```bash
-source .venv/bin/activate
-python -m dashboard.main
-```
-
-Then open the CRUD UI from your laptop or phone:
-
-```text
-http://raspberrypi.local:5582
-```
-
-or:
-
-```text
-http://<raspberry-pi-ip>:5582
-```
-
-## API used by dashboard
-
-```text
-GET /api/dashboard-state
-```
-
-Example response:
-
-```json
-{
-  "dog_state": "BARK",
-  "message": "You have overdue tasks",
-  "counts": {
-    "all": 2,
-    "pending": 1,
-    "done": 1,
-    "overdue": 1,
-    "due_soon": 0
-  },
-  "tasks": [
-    {
-      "id": 1,
-      "title": "Clean kitchen",
-      "due_time": "2026-05-17T20:03:00",
-      "status": "overdue",
-      "done": false
-    }
-  ]
-}
-```
-
-The dashboard uses this response to decide:
-
-```text
-API state -> animator frame -> Pillow render -> e-ink display
-```
-
-## Calendar meeting reminder
-
-Albus can treat Google Calendar meetings as calendar-backed tasks. When a meeting is within 15 minutes, the dashboard API returns a `MEETING` reminder directive. The dashboard briefly switches to a reminder screen with Albus talking and wagging his tail, a "DON'T BE LATE" message, the minutes remaining, and the meeting name. It then returns to the normal task dashboard and repeats periodically until the meeting start time. Once the meeting starts, Albus marks that calendar task as done.
-
-The active meeting reminder frames live in:
-
-```text
-resources/images/status/MEETING/
-```
-
-### Local meeting test
-
-With the web app running, create a calendar-style test task due within the next 15 minutes:
-
-```bash
-curl -X POST http://127.0.0.1:5582/api/calendar-test-task \
-  -F "title=Standup meeting" \
-  -F "due_time=2026-06-09T18:45"
-```
-
-Then run the simulator continuously:
-
-```bash
-python -m dashboard.main --simulate
-```
-
-Albus should briefly switch to the meeting reminder screen, then return to the regular task dashboard.
-
-### Google Calendar setup
-
-Google Calendar sync is handled by a background job, not by the web app or dashboard API.
-
-Install dependencies after pulling this feature:
-
-```bash
-pip install -r requirements.txt
-```
-
-Create Google OAuth credentials for a desktop app, then place the downloaded client secret at:
-
-```text
-config/google_credentials.json
-```
-
-Create or copy the OAuth token to:
-
-```text
-config/google_token.json
-```
-
-Both Google credential files are ignored by git.
-
-The Raspberry Pi installer requires both files before it installs/enables services:
-
-```text
-config/google_credentials.json
-config/google_token.json
-```
-
-If you keep them somewhere else, set these paths in `/etc/default/albus-barks` before rerunning the installer:
-
-```text
-ALBUS_GOOGLE_CALENDAR_ID=primary
-ALBUS_GOOGLE_CREDENTIALS_FILE=/home/albus/albus-barks/config/google_credentials.json
-ALBUS_GOOGLE_TOKEN_FILE=/home/albus/albus-barks/config/google_token.json
-```
-
-Calendar sync runs as its own systemd timer. It does not run inside the dashboard API. The timer invokes:
+Run calendar sync once:
 
 ```bash
 python -m background.calendar_sync
 ```
 
-That command syncs once and exits. The installer creates `albus-barks-calendar-sync.timer`, which runs it every 5 minutes.
-
-For local Mac testing, keep the sync job running in the foreground:
+Source-specific commands:
 
 ```bash
-python -m background.calendar_sync --watch --interval 300
+python -m background.job_sync
 ```
 
-For a one-time local sync:
+The job sync command runs once and exits. In production, `albus-barks-job-sync.timer` decides when to run it again. Job reminders keep repeating until the alert is acknowledged, using `notifications.job_reminder_repeat_minutes` as the cooldown.
+
+`notifications.job_reminder_repeat_minutes` only affects already-created job alerts. For example, `5` means Albus can show the job reminder again every 5 minutes until the alert is acknowledged. The interval for fetching new LinkedIn jobs is controlled by the systemd job sync timer configured during install.
+
+## Raspberry Pi deployment
+
+The installer creates or updates:
+
+- `albus-barks-web.service`
+- `albus-barks-dashboard.service`
+- `albus-barks-calendar-sync.timer`
+- `albus-barks-job-sync.timer`
+
+Before running the installer, put these files in `config/`:
+
+```text
+config/google_credentials.json
+config/google_token.json
+config/alerts.json
+```
+
+What the Google files mean:
+
+- `google_credentials.json` is the OAuth client file downloaded from Google Cloud. Use a Desktop app OAuth client.
+- `google_token.json` is the authorized user token created after you approve Calendar read-only access. Albus uses it to refresh access without opening a browser on the Pi.
+
+Official Google docs:
+
+- [Create Google Workspace access credentials](https://developers.google.com/workspace/guides/create-credentials)
+- [Google Calendar API Python quickstart](https://developers.google.com/calendar/api/quickstart/python)
+
+Create the alert config from the example:
 
 ```bash
-python -m background.calendar_sync
+cp config/alerts.example.json config/alerts.json
+nano config/alerts.json
 ```
 
-The installer creates an optional environment file here:
+Then confirm the required files exist:
+
+```bash
+ls config/google_credentials.json config/google_token.json config/alerts.json
+```
+
+The installer will stop with a clear error if any of those files are missing.
+
+Install or update services after those files are in place:
+
+```bash
+sudo ./install_albus_service.sh
+```
+
+During install, the script asks for:
+
+```text
+BRIGHT_DATA_API_TOKEN
+OPENAI_API_KEY
+Google Calendar sync interval, default 5min
+LinkedIn job sync interval, default 2d
+```
+
+Press Enter to keep the default intervals. Press Enter to skip either API key and fill it later. The installer saves API keys in the systemd environment file:
 
 ```text
 /etc/default/albus-barks
 ```
 
-If you use a non-primary calendar, replace `primary` with that calendar ID.
-
-If you need to install temporarily without Google Calendar files, pass:
+That file is intentionally outside the repo. It is the normal Debian/Raspberry Pi convention for service environment variables and keeps tokens out of git. To edit it later:
 
 ```bash
-sudo REQUIRE_GOOGLE_CALENDAR=false ./install_albus_service.sh
+sudo nano /etc/default/albus-barks
 ```
 
-Then add the files later and start the timer:
+Example values:
+
+```text
+BRIGHT_DATA_API_TOKEN=your_bright_data_token
+OPENAI_API_KEY=your_openai_api_key
+```
+
+For a non-interactive install, pass the keys as environment variables:
 
 ```bash
-sudo systemctl start albus-barks-calendar-sync.timer
+sudo BRIGHT_DATA_API_TOKEN=your_bright_data_token \
+  OPENAI_API_KEY=your_openai_api_key \
+  CALENDAR_SYNC_INTERVAL=5min \
+  JOB_SYNC_INTERVAL=2d \
+  ./install_albus_service.sh
 ```
 
-## Image frames and animation
+Do not use `export` in this file. systemd reads it as `KEY=value` lines.
 
-Mood frames live in:
+OpenAI docs:
 
-```text
-resources/images/status/<STATE>/
-```
+- [OpenAI API quickstart](https://platform.openai.com/docs/quickstart)
 
-Expected states:
-
-```text
-IDLE
-BARK
-HAPPY
-SLEEPY
-SAD
-MEETING
-```
-
-Each folder can contain multiple frames:
-
-```text
-resources/images/status/IDLE/1.png
-resources/images/status/IDLE/2.png
-resources/images/status/IDLE/3.png
-resources/images/status/IDLE/4.png
-resources/images/status/IDLE/5.png
-```
-
-The dashboard uses `dashboard/animator.py` to cycle through available frames. If a state has no frames, it falls back to `IDLE`.
-
-## Running with systemd on Raspberry Pi
-
-The easiest install path is the repo installer:
+After changing `/etc/default/albus-barks`, restart long-running services:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ErickYataco/albus-barks/main/install_albus_service.sh -o /tmp/install_albus_service.sh
-chmod +x /tmp/install_albus_service.sh
-sudo /tmp/install_albus_service.sh
-sudo systemctl start albus-barks-web.service
-sudo systemctl start albus-barks-dashboard.service
+sudo systemctl restart albus-barks-web.service albus-barks-dashboard.service
 ```
 
-The installer:
+The calendar and job timers run one-shot commands, so they pick up env/config changes on their next run. To force them now:
 
-- Creates and enables `albus-barks-web.service`.
-- Creates and enables `albus-barks-dashboard.service`.
-- Creates and enables `albus-barks-calendar-sync.timer` for Google Calendar sync every 5 minutes.
-- Clones or updates `https://github.com/ErickYataco/albus-barks.git` when needed.
-- Installs Raspberry Pi system packages for Python, Pillow, GPIOZero/LGPIO, GPIO, and SPI.
-- Enables SPI and I2C with `raspi-config nonint`.
-- Creates or reuses the dedicated `albus` user and adds it to `spi`, `gpio`, and `i2c`.
-- Creates `kill_port_5582.sh` as a manual helper for freeing port `5582`.
-- Writes install logs under `/var/log/albus_install`.
-- Runs the services as `albus`, not `root`.
+```bash
+sudo systemctl start albus-barks-calendar-sync.service
+sudo systemctl start albus-barks-job-sync.service
+```
 
-The installer uses a virtual environment at `/home/albus/albus-barks/.venv`. This is different from Bjorn's installer, which installs into the system Python with `--break-system-packages`. Albus uses a venv so FastAPI/Uvicorn dependencies stay isolated from Raspberry Pi OS packages, while `--system-site-packages` still lets the venv see apt-installed hardware packages such as `python3-spidev` and `python3-gpiozero`.
-
-Albus does not stop Bjorn automatically. Only one process should own the Waveshare EPD/SPI/GPIO stack at a time, so stop Bjorn manually before starting Albus:
+Only one process should own the Waveshare EPD/SPI/GPIO stack at a time. Stop Bjorn before starting Albus dashboard:
 
 ```bash
 sudo systemctl stop bjorn.service
@@ -377,7 +377,7 @@ sudo systemctl start albus-barks-web.service
 sudo systemctl start albus-barks-dashboard.service
 ```
 
-To switch back to Bjorn:
+To switch back:
 
 ```bash
 sudo systemctl stop albus-barks-dashboard.service
@@ -385,78 +385,47 @@ sudo systemctl stop albus-barks-web.service
 sudo systemctl start bjorn.service
 ```
 
-If you want systemd to make the services mutually exclusive without pre-start stop commands, install Albus with an explicit conflict:
+Uninstall systemd units:
 
 ```bash
-sudo CONFLICTS_SERVICE=bjorn.service ./install_albus_service.sh
+sudo ./uninstall_albus_service.sh
 ```
 
-You can also install the example units manually.
+By default, uninstall keeps the repo, `albus` user, and `/etc/default/albus-barks`. Remove those only when you really mean it:
 
-The repo includes two service examples:
+```bash
+sudo REMOVE_ENV_FILE=true ./uninstall_albus_service.sh
+sudo REMOVE_APP_DIR=true ./uninstall_albus_service.sh
+sudo REMOVE_USER=true ./uninstall_albus_service.sh
+```
+
+## Secrets and local files
+
+These files should never be committed:
 
 ```text
-systemd-web.service.example
-systemd-dashboard.service.example
-systemd-calendar-sync.service.example
-systemd-calendar-sync.timer.example
+config/alerts.json
+config/google_credentials.json
+config/google_token.json
+.env
 ```
 
-They are not active by default. To install them:
-
-```bash
-sudo cp systemd-web.service.example /etc/systemd/system/albus-barks-web.service
-sudo cp systemd-dashboard.service.example /etc/systemd/system/albus-barks-dashboard.service
-sudo cp systemd-calendar-sync.service.example /etc/systemd/system/albus-barks-calendar-sync.service
-sudo cp systemd-calendar-sync.timer.example /etc/systemd/system/albus-barks-calendar-sync.timer
-sudo systemctl daemon-reload
-sudo systemctl enable albus-barks-web.service
-sudo systemctl enable albus-barks-dashboard.service
-sudo systemctl enable albus-barks-calendar-sync.timer
-sudo systemctl start albus-barks-web.service
-sudo systemctl start albus-barks-dashboard.service
-sudo systemctl start albus-barks-calendar-sync.timer
-```
-
-Check status:
-
-```bash
-sudo systemctl status albus-barks-web.service
-sudo systemctl status albus-barks-dashboard.service
-sudo systemctl status albus-barks-calendar-sync.timer
-```
-
-View logs:
-
-```bash
-journalctl -u albus-barks-web.service -f
-journalctl -u albus-barks-dashboard.service -f
-journalctl -u albus-barks-calendar-sync.service -f
-```
-
-If your project is not in `/home/albus/albus-barks`, update `WorkingDirectory` and `ExecStart` inside both service files, or run the installer with `ALBUS_PATH=/your/path`.
-
-## Notes about e-ink animation
-
-E-ink is not made for smooth video. It is better for slow state-based animation.
-
-Recommended behavior:
-
-- `IDLE`: normal waiting
-- `BARK`: task due soon or overdue
-- `HAPPY`: recently completed task
-- `SLEEPY`: no pending tasks
-- `SAD`: too many overdue tasks or API fallback
-
-The dashboard refreshes more often for alert states:
+Usually needed in `/etc/default/albus-barks`:
 
 ```text
-BARK / HAPPY / SAD -> ALERT_REFRESH_SECONDS
-IDLE / SLEEPY      -> REFRESH_SECONDS
+BRIGHT_DATA_API_TOKEN
+OPENAI_API_KEY
 ```
 
-Those values are configured in:
+## Hardware target
+
+- Raspberry Pi Zero 2 WH
+- Waveshare 2.13-inch e-Paper HAT
+- Display layout: `250x122`
+- Python 3.10+ recommended
+
+In simulator mode, the latest render is saved here:
 
 ```text
-dashboard/config.py
+runtime/last_render.png
 ```

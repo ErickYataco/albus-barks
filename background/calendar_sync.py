@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from background.config import load_alert_config
 from web import crud
 
 
@@ -17,8 +18,30 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
 def sync_once(session: Session) -> dict:
-    count = sync_google_calendar(session)
-    return {"synced": True, "count": count, "error": None}
+    started_at = datetime.now()
+    try:
+        count = sync_google_calendar(session)
+        crud.record_alert_run(
+            session,
+            source="google_calendar",
+            status="ok",
+            message=None,
+            items_seen=count,
+            alerts_created=count,
+            started_at=started_at,
+            finished_at=datetime.now(),
+        )
+        return {"synced": True, "count": count, "error": None}
+    except Exception as exc:
+        crud.record_alert_run(
+            session,
+            source="google_calendar",
+            status="error",
+            message=str(exc),
+            started_at=started_at,
+            finished_at=datetime.now(),
+        )
+        return {"synced": False, "count": 0, "error": str(exc)}
 
 
 def sync_google_calendar(session: Session) -> int:
@@ -29,9 +52,10 @@ def sync_google_calendar(session: Session) -> int:
     except ImportError as exc:
         raise RuntimeError("Google Calendar packages are not installed") from exc
 
-    credentials_path = Path(os.getenv("ALBUS_GOOGLE_CREDENTIALS_FILE", DEFAULT_CREDENTIALS))
-    token_path = Path(os.getenv("ALBUS_GOOGLE_TOKEN_FILE", DEFAULT_TOKEN))
-    calendar_id = os.getenv("ALBUS_GOOGLE_CALENDAR_ID", "primary")
+    credentials_path = DEFAULT_CREDENTIALS
+    token_path = DEFAULT_TOKEN
+    config = load_alert_config().get("calendar", {})
+    calendar_id = os.getenv("ALBUS_GOOGLE_CALENDAR_ID", config.get("calendar_id", "primary"))
 
     if not credentials_path.exists():
         raise RuntimeError(f"Missing Google credentials file: {credentials_path}")
@@ -71,13 +95,13 @@ def sync_google_calendar(session: Session) -> int:
         if not raw_start or "dateTime" not in start:
             continue
 
-        due_time = datetime.fromisoformat(raw_start.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
-        crud.upsert_calendar_task(
+        starts_at = datetime.fromisoformat(raw_start.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+        crud.upsert_calendar_alert(
             session=session,
             external_id=event["id"],
             title=event.get("summary") or "Calendar meeting",
             description=event.get("description"),
-            due_time=due_time,
+            starts_at=starts_at,
             synced_at=datetime.now(),
         )
         count += 1
@@ -88,7 +112,7 @@ def sync_google_calendar(session: Session) -> int:
 def main() -> None:
     from web.database import SessionLocal, init_db
 
-    parser = argparse.ArgumentParser(description="Sync Google Calendar events into Albus tasks")
+    parser = argparse.ArgumentParser(description="Sync Google Calendar meetings into Albus alerts")
     parser.add_argument("--watch", action="store_true", help="Keep syncing instead of running once")
     parser.add_argument("--interval", type=int, default=300, help="Seconds between syncs in watch mode")
     args = parser.parse_args()

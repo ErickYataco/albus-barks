@@ -29,12 +29,19 @@ SKIP_APT="${SKIP_APT:-false}"
 CONFIGURE_INTERFACES="${CONFIGURE_INTERFACES:-true}"
 CONFLICTS_SERVICE="${CONFLICTS_SERVICE:-}"
 REQUIRE_GOOGLE_CALENDAR="${REQUIRE_GOOGLE_CALENDAR:-true}"
+PROMPT_SECRETS="${PROMPT_SECRETS:-true}"
+PROMPT_INTERVALS="${PROMPT_INTERVALS:-true}"
+INPUT_BRIGHT_DATA_API_TOKEN="${BRIGHT_DATA_API_TOKEN:-}"
+INPUT_OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+CALENDAR_SYNC_INTERVAL="${CALENDAR_SYNC_INTERVAL:-5min}"
+JOB_SYNC_INTERVAL="${JOB_SYNC_INTERVAL:-2d}"
 
 WEB_SERVICE="${SERVICE_PREFIX}-web.service"
 DASHBOARD_SERVICE="${SERVICE_PREFIX}-dashboard.service"
 CALENDAR_SYNC_SERVICE="${SERVICE_PREFIX}-calendar-sync.service"
 CALENDAR_SYNC_TIMER="${SERVICE_PREFIX}-calendar-sync.timer"
-KILL_PORT_SCRIPT="${ALBUS_PATH}/kill_port_${WEB_PORT}.sh"
+JOB_SYNC_SERVICE="${SERVICE_PREFIX}-job-sync.service"
+JOB_SYNC_TIMER="${SERVICE_PREFIX}-job-sync.timer"
 ENV_FILE="/etc/default/${SERVICE_PREFIX}"
 
 log() {
@@ -101,6 +108,124 @@ load_env_file() {
     fi
 }
 
+secret_is_blank() {
+    local value="${1:-}"
+    [ -z "${value}" ] || [ "${value}" = "replace_me" ] || [ "${value}" = "your_bright_data_token" ] || [ "${value}" = "your_openai_api_key" ]
+}
+
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    local tmp_file
+    tmp_file="$(mktemp)"
+
+    if [ -f "${ENV_FILE}" ]; then
+        awk -v key="${key}" -v value="${value}" '
+            BEGIN { found = 0 }
+            $0 ~ "^" key "=" {
+                print key "=" value
+                found = 1
+                next
+            }
+            { print }
+            END {
+                if (!found) {
+                    print key "=" value
+                }
+            }
+        ' "${ENV_FILE}" > "${tmp_file}"
+    else
+        echo "${key}=${value}" > "${tmp_file}"
+    fi
+
+    install -m 600 "${tmp_file}" "${ENV_FILE}"
+    rm -f "${tmp_file}"
+}
+
+prompt_secret() {
+    local key="$1"
+    local label="$2"
+    local current_value="${!key:-}"
+    local value
+
+    if ! secret_is_blank "${current_value}"; then
+        log "INFO" "${key} already configured"
+        return 0
+    fi
+
+    if [ "${PROMPT_SECRETS}" != "true" ] || [ ! -t 0 ]; then
+        log "WARNING" "${key} is empty. Add it to ${ENV_FILE} before running the related sync."
+        return 0
+    fi
+
+    echo
+    echo "${label}"
+    read -r -s -p "Enter ${key} (leave blank to skip for now): " value
+    echo
+
+    if [ -n "${value}" ]; then
+        set_env_value "${key}" "${value}"
+        # shellcheck disable=SC2034
+        printf -v "${key}" "%s" "${value}"
+        log "SUCCESS" "${key} saved to ${ENV_FILE}"
+    else
+        log "WARNING" "${key} left empty"
+    fi
+}
+
+prompt_service_secrets() {
+    load_env_file
+
+    if secret_is_blank "${BRIGHT_DATA_API_TOKEN:-}" && ! secret_is_blank "${INPUT_BRIGHT_DATA_API_TOKEN}"; then
+        set_env_value "BRIGHT_DATA_API_TOKEN" "${INPUT_BRIGHT_DATA_API_TOKEN}"
+        BRIGHT_DATA_API_TOKEN="${INPUT_BRIGHT_DATA_API_TOKEN}"
+    fi
+
+    if secret_is_blank "${OPENAI_API_KEY:-}" && ! secret_is_blank "${INPUT_OPENAI_API_KEY}"; then
+        set_env_value "OPENAI_API_KEY" "${INPUT_OPENAI_API_KEY}"
+        OPENAI_API_KEY="${INPUT_OPENAI_API_KEY}"
+    fi
+
+    prompt_secret "BRIGHT_DATA_API_TOKEN" "Bright Data token is used by the LinkedIn job sync."
+    prompt_secret "OPENAI_API_KEY" "OpenAI API key is used to score LinkedIn jobs for relevance."
+}
+
+prompt_interval() {
+    local key="$1"
+    local label="$2"
+    local current_value="${!key:-}"
+    local value
+
+    if [ "${PROMPT_INTERVALS}" != "true" ] || [ ! -t 0 ]; then
+        log "INFO" "${key}=${current_value}"
+        return 0
+    fi
+
+    echo
+    read -r -p "${label} [${current_value}]: " value
+    if [ -n "${value}" ]; then
+        # shellcheck disable=SC2034
+        printf -v "${key}" "%s" "${value}"
+    fi
+    log "INFO" "${key}=${!key}"
+}
+
+prompt_timer_intervals() {
+    prompt_interval "CALENDAR_SYNC_INTERVAL" "How often should Google Calendar sync run? Use systemd time syntax like 5min, 30min, 1h"
+    prompt_interval "JOB_SYNC_INTERVAL" "How often should LinkedIn job sync run? Use systemd time syntax like 12h, 1d, 2d"
+}
+
+show_google_file_help() {
+    echo
+    echo "Google Calendar files required before services are installed:"
+    echo "  ${ALBUS_PATH}/config/google_credentials.json  OAuth Desktop app client from Google Cloud"
+    echo "  ${ALBUS_PATH}/config/google_token.json        Authorized Calendar read-only user token"
+    echo "Docs:"
+    echo "  https://developers.google.com/workspace/guides/create-credentials"
+    echo "  https://developers.google.com/calendar/api/quickstart/python"
+    echo
+}
+
 require_google_calendar_files() {
     load_env_file
 
@@ -109,23 +234,39 @@ require_google_calendar_files() {
         return 0
     fi
 
-    local credentials_file="${ALBUS_GOOGLE_CREDENTIALS_FILE:-${ALBUS_PATH}/config/google_credentials.json}"
-    local token_file="${ALBUS_GOOGLE_TOKEN_FILE:-${ALBUS_PATH}/config/google_token.json}"
+    local credentials_file="${ALBUS_PATH}/config/google_credentials.json"
+    local token_file="${ALBUS_PATH}/config/google_token.json"
 
     if [ ! -f "${credentials_file}" ]; then
         log "ERROR" "Missing Google credentials file: ${credentials_file}"
-        log "ERROR" "Copy it into place or set ALBUS_GOOGLE_CREDENTIALS_FILE in ${ENV_FILE}, then rerun the installer."
+        log "ERROR" "Copy it into ${ALBUS_PATH}/config/, then rerun the installer."
+        show_google_file_help
         exit 1
     fi
 
     if [ ! -f "${token_file}" ]; then
         log "ERROR" "Missing Google token file: ${token_file}"
-        log "ERROR" "Create/copy the token before installing services, or set ALBUS_GOOGLE_TOKEN_FILE in ${ENV_FILE}."
+        log "ERROR" "Create/copy it into ${ALBUS_PATH}/config/, then rerun the installer."
+        show_google_file_help
         exit 1
     fi
 
     log "SUCCESS" "Google Calendar credentials found: ${credentials_file}"
     log "SUCCESS" "Google Calendar token found: ${token_file}"
+}
+
+require_alert_config_file() {
+    load_env_file
+
+    local config_file="${ALBUS_PATH}/config/alerts.json"
+
+    if [ ! -f "${config_file}" ]; then
+        log "ERROR" "Missing alert config file: ${config_file}"
+        log "ERROR" "Copy ${ALBUS_PATH}/config/alerts.example.json to ${ALBUS_PATH}/config/alerts.json, edit it, then rerun the installer."
+        exit 1
+    fi
+
+    log "SUCCESS" "Alert config found: ${config_file}"
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -144,7 +285,7 @@ log "INFO" "Log file: ${LOG_FILE}"
 if [ "${SKIP_APT}" != "true" ]; then
     log "INFO" "Installing system dependencies"
     run apt-get update
-    run apt-get install -y git lsof python3-venv python3-pip python3-pil python3-gpiozero python3-lgpio python3-rpi.gpio python3-spidev
+    run apt-get install -y git python3-venv python3-pip python3-pil python3-gpiozero python3-lgpio python3-rpi.gpio python3-spidev
 fi
 
 setup_user
@@ -174,29 +315,24 @@ log "INFO" "Installing Python dependencies"
 run sudo -u "${ALBUS_USER}" "${PYTHON_BIN}" -m pip install --upgrade pip
 run sudo -u "${ALBUS_USER}" "${PYTHON_BIN}" -m pip install -r "${ALBUS_PATH}/requirements.txt"
 
-cat > "${KILL_PORT_SCRIPT}" << EOF
-#!/bin/bash
-PORT=${WEB_PORT}
-PIDS=\$(lsof -t -i:\${PORT})
-if [ -n "\${PIDS}" ]; then
-    echo "Killing PIDs using port \${PORT}: \${PIDS}"
-    kill -9 \${PIDS}
-fi
-EOF
-chmod +x "${KILL_PORT_SCRIPT}"
-chown "${ALBUS_USER}:${ALBUS_USER}" "${KILL_PORT_SCRIPT}"
-
 if [ ! -f "${ENV_FILE}" ]; then
     cat > "${ENV_FILE}" << EOF
 # Albus Barks service configuration.
-# Google Calendar credentials and token must exist before services are installed.
-# ALBUS_GOOGLE_CALENDAR_ID=primary
-# ALBUS_GOOGLE_CREDENTIALS_FILE=${ALBUS_PATH}/config/google_credentials.json
-# ALBUS_GOOGLE_TOKEN_FILE=${ALBUS_PATH}/config/google_token.json
+# Default file locations are:
+#   ${ALBUS_PATH}/config/google_credentials.json
+#   ${ALBUS_PATH}/config/google_token.json
+#   ${ALBUS_PATH}/config/alerts.json
+# Fill these before running the LinkedIn job sync.
+BRIGHT_DATA_API_TOKEN=
+OPENAI_API_KEY=
 EOF
+    chmod 600 "${ENV_FILE}"
 fi
 
 require_google_calendar_files
+require_alert_config_file
+prompt_service_secrets
+prompt_timer_intervals
 
 CONFLICTS_LINE=""
 if [ -n "${CONFLICTS_SERVICE}" ]; then
@@ -261,12 +397,41 @@ EOF
 
 cat > "/etc/systemd/system/${CALENDAR_SYNC_TIMER}" << EOF
 [Unit]
-Description=Run Albus Barks Google Calendar Sync Every 5 Minutes
+Description=Run Albus Barks Google Calendar Sync Every ${CALENDAR_SYNC_INTERVAL}
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=${CALENDAR_SYNC_INTERVAL}
 Unit=${CALENDAR_SYNC_SERVICE}
+
+[Install]
+WantedBy=timers.target
+EOF
+
+cat > "/etc/systemd/system/${JOB_SYNC_SERVICE}" << EOF
+[Unit]
+Description=Albus Barks Bright Data LinkedIn Job Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-${ENV_FILE}
+ExecStart=${PYTHON_BIN} -m background.job_sync
+WorkingDirectory=${ALBUS_PATH}
+StandardOutput=journal
+StandardError=journal
+User=${ALBUS_USER}
+EOF
+
+cat > "/etc/systemd/system/${JOB_SYNC_TIMER}" << EOF
+[Unit]
+Description=Run Albus Barks Bright Data LinkedIn Job Sync Every ${JOB_SYNC_INTERVAL}
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=${JOB_SYNC_INTERVAL}
+Unit=${JOB_SYNC_SERVICE}
 
 [Install]
 WantedBy=timers.target
@@ -277,16 +442,19 @@ run systemctl daemon-reload
 run systemctl enable "${WEB_SERVICE}"
 run systemctl enable "${DASHBOARD_SERVICE}"
 run systemctl enable "${CALENDAR_SYNC_TIMER}"
+run systemctl enable "${JOB_SYNC_TIMER}"
 
 log "SUCCESS" "Installed and enabled:"
 echo "  ${WEB_SERVICE}"
 echo "  ${DASHBOARD_SERVICE}"
-echo "  ${CALENDAR_SYNC_TIMER}"
+echo "  ${CALENDAR_SYNC_TIMER} (${CALENDAR_SYNC_INTERVAL})"
+echo "  ${JOB_SYNC_TIMER} (${JOB_SYNC_INTERVAL})"
 echo
 echo "Start them with:"
 echo "  sudo systemctl start ${WEB_SERVICE}"
 echo "  sudo systemctl start ${DASHBOARD_SERVICE}"
 echo "  sudo systemctl start ${CALENDAR_SYNC_TIMER}"
+echo "  sudo systemctl start ${JOB_SYNC_TIMER}"
 echo
 echo "If another app owns port ${WEB_PORT} or the Waveshare EPD, stop it first."
 echo "For Bjorn, run: sudo systemctl stop bjorn.service"

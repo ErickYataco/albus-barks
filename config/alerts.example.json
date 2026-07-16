@@ -1,0 +1,78 @@
+{
+  "calendar": {
+    "enabled": true,
+    "calendar_id": "primary",
+    "reminder_minutes": 15,
+    "repeat_minutes": 5
+  },
+  "linkedin_jobs": {
+    "enabled": true,
+    "provider": "bright_data",
+    "openai_relevance": {
+      "enabled": true,
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "gpt-4.1-mini",
+      "min_score": 70,
+      "max_jobs_to_score": 10,
+      "batch_size": 10,
+      "system_prompt": "You score LinkedIn jobs for a candidate. Use candidate_profile and objective as the primary relevance criteria. Return structured results. Each result must include index, score from 0 to 100, include boolean, severity as info or high, and reason. Set include=true only when score is at least minimum_alert_score.",
+      "objective": "Find remote full-time DevOps, SRE, platform engineering, Kubernetes, cloud infrastructure, and automation roles that are realistic for a candidate in Peru or Latin America.",
+      "profile": "Senior DevOps / platform engineer interested in remote roles, Kubernetes, CI/CD, Linux, cloud infrastructure, automation, observability, and reliability engineering."
+    },
+    "exclude_companies": [],
+    "searches": [
+      {
+        "keyword": "platform engineer",
+        "location": "Latin America",
+        "country": "US",
+        "remote": "Remote",
+        "job_type": "Full-time",
+        "experience_level": "Mid-Senior level",
+        "time_range": "Past week"
+      },
+      {
+        "keyword": "devops engineer",
+        "location": "Peru",
+        "country": "PE",
+        "remote": "Remote",
+        "job_type": "Full-time",
+        "experience_level": "Mid-Senior level",
+        "time_range": "Past 24 hours"
+      },
+      {
+        "keyword": "devops engineer remote",
+        "location": "Latin America",
+        "country": "PE",
+        "remote": "Remote",
+        "job_type": "Full-time",
+        "experience_level": "Mid-Senior level",
+        "time_range": "Past 24 hours"
+      },
+      {
+        "keyword": "devops engineer kubernetes",
+        "location": "Latin America",
+        "country": "AR",
+        "remote": "Remote",
+        "job_type": "Full-time",
+        "experience_level": "Mid-Senior level",
+        "time_range": "Past 24 hours"
+      }
+    ],
+    "bright_data": {
+      "api_token_env": "BRIGHT_DATA_API_TOKEN",
+      "api_url": "https://api.brightdata.com/datasets/v3/trigger",
+      "snapshot_url": "https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}?format=json",
+      "limit_per_input": 20,
+      "dataset_id": "gd_lpfll7v5hcqtkxl6l",
+      "collector_id": "",
+      "request_mode": "discover_by_keyword",
+      "debug_save_raw_responses": true,
+      "timeout_seconds": 180,
+      "snapshot_timeout_seconds": 900,
+      "snapshot_poll_interval_seconds": 15
+    }
+  },
+  "notifications": {
+    "job_reminder_repeat_minutes": 5
+  }
+}

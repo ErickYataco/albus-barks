@@ -67,6 +67,18 @@ def mood_icon(dog_state: str) -> str:
     return icons.get(dog_state.upper(), "•")
 
 
+def alert_time(alert: dict) -> str:
+    return format_due_time(alert.get("starts_at") or alert.get("due_time"))
+
+
+def alert_label(alert_type: str) -> str:
+    labels = {
+        "job": "JOB",
+        "meeting": "MTG",
+    }
+    return labels.get(str(alert_type or "alert").lower(), safe_text(alert_type, 3).upper())
+
+
 def load_dog_image(
     dog_state: str,
     frame_path: Optional[Path] = None,
@@ -102,7 +114,7 @@ def load_dog_image(
 def render_dashboard(state: dict, frame_path: Optional[Path] = None) -> Image.Image:
     dog_state = state.get("dog_state", "IDLE").upper()
     message = state.get("message", "Albus is waiting")
-    tasks = state.get("tasks", [])
+    alerts = state.get("alerts", state.get("tasks", []))
 
     image = Image.new("1", (SCREEN_WIDTH, SCREEN_HEIGHT), 255)
     draw = ImageDraw.Draw(image)
@@ -121,24 +133,26 @@ def render_dashboard(state: dict, frame_path: Optional[Path] = None) -> Image.Im
     # Divider
     draw.line((4, 39, 246, 39), fill=0, width=1)
 
-    # Tasks area
+    # Alerts area
     y = 44
-    if not tasks:
-        draw.text((6, y), "No tasks", font=FONT_BOLD, fill=0)
-        draw.text((6, y + 14), "Albus can rest", font=FONT_SMALL, fill=0)
+    if not alerts:
+        draw.text((6, y), "No alerts", font=FONT_BOLD, fill=0)
+        draw.text((6, y + 14), "Watching sources", font=FONT_SMALL, fill=0)
     else:
-        for task in tasks[:3]:
-            title = safe_text(task.get("title", "Untitled"), 14)
-            due = format_due_time(task.get("due_time"))
-            status = task.get("status", "pending")
+        for alert in alerts[:3]:
+            title = safe_text(alert.get("title", "Untitled"), 14)
+            starts = alert_time(alert)
+            alert_type = alert_label(alert.get("alert_type", "alert"))
+            severity = alert.get("severity", "info")
 
-            checkbox = "[x]" if status == "done" else "[ ]"
+            marker = "!" if severity in {"high", "urgent"} else "-"
 
-            draw.text((6, y), checkbox, font=FONT_SMALL, fill=0)
-            draw.text((28, y), title, font=FONT_SMALL, fill=0)
+            draw.text((6, y), marker, font=FONT_BOLD, fill=0)
+            draw.text((18, y), alert_type, font=FONT_SMALL, fill=0)
+            draw.text((44, y), title, font=FONT_SMALL, fill=0)
 
-            if due:
-                draw.text((110, y), due, font=FONT_SMALL, fill=0)
+            if starts:
+                draw.text((118, y), starts, font=FONT_SMALL, fill=0)
 
             y += 15
 
@@ -236,5 +250,44 @@ def render_meeting_reminder(animation: dict, frame_path: Optional[Path] = None) 
     for line in wrap_text(title, FONT_SMALL, text_width, 3):
         draw.text((text_x, y), line, font=FONT_SMALL, fill=0)
         y += 12
+
+    return image
+
+
+def render_job_reminder(animation: dict, frame_path: Optional[Path] = None) -> Image.Image:
+    image = Image.new("1", (SCREEN_WIDTH, SCREEN_HEIGHT), 255)
+    draw = ImageDraw.Draw(image)
+
+    title = animation.get("title", "Job match")
+    description = animation.get("description", "")
+    score = animation.get("score")
+
+    draw.text((4, 2), datetime.now().strftime("%H:%M"), font=FONT_TITLE, fill=0)
+    draw.text((195, 2), "ALBUS", font=FONT_TITLE, fill=0)
+    draw.line((4, 20, 246, 20), fill=0, width=1)
+
+    dog = load_dog_image("BARK", frame_path, max_size=(118, 96))
+    dog_x = 4 + ((118 - dog.width) // 2)
+    dog_y = SCREEN_HEIGHT - dog.height - 2
+    image.paste(dog, (dog_x, dog_y))
+
+    text_x = 132
+    text_width = 112
+
+    draw.text((text_x, 27), "JOB", font=FONT_TITLE, fill=0)
+    draw.text((text_x, 43), "MATCH", font=FONT_TITLE, fill=0)
+
+    if score is not None:
+        draw.text((text_x, 63), f"Score {score}", font=FONT_BOLD, fill=0)
+    else:
+        draw.text((text_x, 63), "High priority", font=FONT_BOLD, fill=0)
+
+    y = 81
+    for line in wrap_text(title, FONT_SMALL, text_width, 2):
+        draw.text((text_x, y), line, font=FONT_SMALL, fill=0)
+        y += 12
+
+    if description and y <= 105:
+        draw.text((text_x, y), safe_text(description, 18), font=FONT_TINY, fill=0)
 
     return image

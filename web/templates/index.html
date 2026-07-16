@@ -3,8 +3,8 @@
 {% block content %}
 <section class="hero">
     <div>
-        <h1>Tasks</h1>
-        <p>Albus barks when something needs attention and gets happy when you complete a task.</p>
+        <h1>Alerts</h1>
+        <p>Albus watches your calendar and job searches, then barks when a meeting or job match needs attention.</p>
     </div>
 
     <div
@@ -12,113 +12,221 @@
         class="dog-card dog-{{ dog_state | lower }}"
         data-current-state="{{ dog_state }}"
         data-current-total="{{ counts.all }}"
-        data-current-pending="{{ counts.pending }}"
-        data-current-done="{{ counts.done }}"
-        data-current-attention="{{ counts.overdue + counts.due_soon }}"
+        data-current-active="{{ counts.active }}"
+        data-current-high="{{ counts.high }}"
+        data-current-history="{{ counts.history }}"
     >
-        <img
-            id="dog-mood-image"
-            src="/static/images/status/{{ dog_state }}/1.png"
-            alt="Albus {{ dog_state }}"
-            class="dog-preview"
-            onerror="this.onerror=null; this.src='/static/albus_preview.png';"
-        >
+        <div class="dog-stage">
+            <img
+                id="dog-mood-image"
+                src="/static/images/status/{{ dog_state }}/1.png"
+                alt="Albus {{ dog_state }}"
+                class="dog-preview"
+                onerror="this.onerror=null; this.src='/static/albus_preview.png';"
+            >
+        </div>
 
-        <strong id="dog-mood-state">{{ dog_state }}</strong>
+        <div class="dog-status">
+            <span class="status-dot"></span>
+            <strong id="dog-mood-state">{{ dog_state }}</strong>
+        </div>
         <span id="dog-mood-message">{{ message }}</span>
     </div>
 </section>
 
-<section class="filters">
-    <a class="{{ 'active' if filter_value == 'active' else '' }}" href="/?filter=active">Active</a>
-    <a class="{{ 'active' if filter_value == 'pending' else '' }}" href="/?filter=pending">Pending</a>
-    <a class="{{ 'active' if filter_value == 'done' else '' }}" href="/?filter=done">Done</a>
-    <a class="{{ 'active' if filter_value == 'all' else '' }}" href="/?filter=all">All</a>
-</section>
+<div class="control-panel">
+    <section class="filters view-tabs" aria-label="Main view">
+        <a class="{{ 'active' if view == 'alerts' else '' }}" href="/?view=alerts&filter={{ filter_value }}">
+            <span class="material-symbols-outlined">notifications</span>
+            <span>Alerts</span>
+        </a>
+        <a class="{{ 'active' if view == 'sources' else '' }}" href="/?view=sources">
+            <span class="material-symbols-outlined">list_alt</span>
+            <span>Sources</span>
+        </a>
+    </section>
 
+    {% if view == "alerts" %}
+    <section class="filters status-filters" aria-label="Alert filter">
+        <a class="{{ 'active' if filter_value == 'active' else '' }}" href="/?view=alerts&filter=active&page=1">
+            <span class="material-symbols-outlined">check_circle</span>
+            <span>Active</span>
+        </a>
+        <a class="{{ 'active' if filter_value == 'history' else '' }}" href="/?view=alerts&filter=history&page=1">
+            <span class="material-symbols-outlined">schedule</span>
+            <span>History</span>
+        </a>
+        <a class="{{ 'active' if filter_value == 'all' else '' }}" href="/?view=alerts&filter=all&page=1">
+            <span class="material-symbols-outlined">apps</span>
+            <span>All</span>
+        </a>
+    </section>
+    {% endif %}
+</div>
+
+{% if view == "alerts" %}
 <section class="stats-grid">
-    <article class="stat-card">
-        <span>Total</span>
-        <strong id="count-total">{{ counts.all }}</strong>
+    <article class="stat-card stat-total">
+        <span class="stat-icon material-symbols-outlined">bar_chart</span>
+        <div>
+            <span>Total</span>
+            <strong id="count-total">{{ counts.all }}</strong>
+        </div>
     </article>
 
-    <article class="stat-card">
-        <span>Pending</span>
-        <strong id="count-pending">{{ counts.pending }}</strong>
+    <article class="stat-card stat-active">
+        <span class="stat-icon material-symbols-outlined">check_circle</span>
+        <div>
+            <span>Active</span>
+            <strong id="count-active">{{ counts.active }}</strong>
+        </div>
     </article>
 
-    <article class="stat-card">
-        <span>Done</span>
-        <strong id="count-done">{{ counts.done }}</strong>
+    <article class="stat-card stat-high">
+        <span class="stat-icon material-symbols-outlined">flag</span>
+        <div>
+            <span>High priority</span>
+            <strong id="count-high">{{ counts.high }}</strong>
+        </div>
     </article>
 
-    <article class="stat-card">
-        <span>Needs attention</span>
-        <strong id="count-attention">{{ counts.overdue + counts.due_soon }}</strong>
+    <article class="stat-card stat-history">
+        <span class="stat-icon material-symbols-outlined">history</span>
+        <div>
+            <span>History</span>
+            <strong id="count-history">{{ counts.history }}</strong>
+        </div>
     </article>
 </section>
+{% endif %}
 
-{% if tasks %}
+{% if view == "alerts" %}
+{% if alerts %}
 <section class="task-list">
-    {% for item in tasks %}
-        {% set task = item.task %}
+    {% for item in alerts %}
+        {% set alert = item.alert %}
         {% set status = item.status %}
 
-        <article class="task-card {{ status }}">
+        <article class="task-card alert-card alert-{{ alert.alert_type }} {{ status }}">
             <div class="task-main">
-                <form action="/tasks/{{ task.id }}/toggle" method="post">
-                    <button class="checkbox" type="submit" aria-label="Toggle task">
-                        {% if task.done %}✓{% endif %}
-                    </button>
-                </form>
+                {% set alert_icon = "calendar_month" if alert.alert_type == "meeting" else "work" %}
+                <div class="alert-symbol">
+                    <span class="material-symbols-outlined">{{ alert_icon }}</span>
+                </div>
 
                 <div>
-                    <a href="/tasks/{{ task.id }}" class="task-title">{{ task.title }}</a>
+                    {% if alert.url %}
+                        <a class="task-title alert-link" href="{{ alert.url }}" target="_blank" rel="noopener noreferrer">{{ alert.title }}</a>
+                    {% else %}
+                        <strong class="task-title">{{ alert.title }}</strong>
+                    {% endif %}
 
-                    {% if task.description %}
-                        <p>{{ task.description }}</p>
+                    {% if alert.description %}
+                        <p>{{ alert.description }}</p>
                     {% endif %}
 
                     <div class="task-meta">
-                        <span>Due: {{ task.due_time | pretty_datetime }}</span>
+                        <span>{{ alert.source }}</span>
 
-                        {% if status == "overdue" %}
-                            <span class="badge badge-danger">Overdue</span>
-                        {% elif status == "due-soon" %}
-                            <span class="badge badge-warning">Due soon</span>
-                        {% elif status == "done" %}
-                            <span class="badge badge-success">Done</span>
-                        {% else %}
-                            <span class="badge">Pending</span>
+                        {% if alert.starts_at %}
+                            <span>{{ alert.starts_at | pretty_datetime }}</span>
                         {% endif %}
+
+                        <span class="badge badge-{{ alert.alert_type }}">{{ alert.alert_type }}</span>
+                        <span class="badge badge-{{ alert.severity }}">{{ alert.severity }}</span>
+                        <span class="badge badge-{{ status }}">{{ status }}</span>
                     </div>
                 </div>
             </div>
 
-            <div class="task-actions">
-                <a href="/tasks/{{ task.id }}/edit">Edit</a>
-
-                <form
-                    action="/tasks/{{ task.id }}/delete"
-                    method="post"
-                    onsubmit="return confirm('Delete this task?');"
-                >
-                    <button type="submit" class="link-danger">Delete</button>
+            {% if alert.status in ["active", "notified"] %}
+            <div class="card-actions">
+                <form action="/alerts/{{ alert.id }}/acknowledge" method="post">
+                    <button type="submit" class="button button-secondary">Acknowledge</button>
                 </form>
+                <button class="icon-button" type="button" aria-label="More options">
+                    <span class="material-symbols-outlined">more_vert</span>
+                </button>
             </div>
+            {% else %}
+            <button class="icon-button" type="button" aria-label="More options">
+                <span class="material-symbols-outlined">more_vert</span>
+            </button>
+            {% endif %}
         </article>
     {% endfor %}
 </section>
 {% else %}
 <section class="empty-state">
     <div class="empty-dog">🐶</div>
-    <h2>No tasks yet</h2>
-    <p>Create your first reminder and let Albus help you remember it.</p>
-    <a href="/tasks/new" class="button button-primary">Create task</a>
+    <h2>No alerts</h2>
+    <p>Albus is watching calendar meetings and job matches.</p>
+</section>
+{% endif %}
+{% endif %}
+
+{% if view == "sources" %}
+<section class="runs-section">
+    {% if runs %}
+        <div class="runs-list">
+            {% for run in runs %}
+                <article class="run-row">
+                    <div>
+                        <strong>{{ run.source }}</strong>
+                        <span>{{ run.finished_at | pretty_datetime }}</span>
+                    </div>
+                    <span class="badge badge-{{ run.status }}">{{ run.status }}</span>
+                    <span>{{ run.items_seen }} seen</span>
+                    <span>{{ run.alerts_created }} alerts</span>
+                    {% if run.message %}
+                        <small>{{ run.message }}</small>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">No background jobs have reported yet.</p>
+    {% endif %}
 </section>
 {% endif %}
 
+{% if total_pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+    {% if page > 1 %}
+        {% if view == "alerts" %}
+            <a class="page-arrow" href="/?view=alerts&filter={{ filter_value }}&page={{ page - 1 }}" aria-label="Previous page">‹</a>
+        {% else %}
+            <a class="page-arrow" href="/?view=sources&page={{ page - 1 }}" aria-label="Previous page">‹</a>
+        {% endif %}
+    {% else %}
+        <span class="page-arrow disabled" aria-hidden="true">‹</span>
+    {% endif %}
+
+    <strong>{{ page }} / {{ total_pages }}</strong>
+
+    {% if page < total_pages %}
+        {% if view == "alerts" %}
+            <a class="page-arrow" href="/?view=alerts&filter={{ filter_value }}&page={{ page + 1 }}" aria-label="Next page">›</a>
+        {% else %}
+            <a class="page-arrow" href="/?view=sources&page={{ page + 1 }}" aria-label="Next page">›</a>
+        {% endif %}
+    {% else %}
+        <span class="page-arrow disabled" aria-hidden="true">›</span>
+    {% endif %}
+</nav>
+{% endif %}
+
 <script>
+    function updateAlbusImage(state) {
+        const imageEl = document.getElementById("dog-mood-image");
+        if (!imageEl) return;
+
+        const normalizedState = state || "IDLE";
+
+        imageEl.src = `/static/images/status/${normalizedState}/1.png?t=${Date.now()}`;
+        imageEl.alt = `Albus ${normalizedState}`;
+    }
+
     async function refreshAlbusState() {
         try {
             const response = await fetch("/api/dashboard-state", {
@@ -137,49 +245,36 @@
             const imageEl = document.getElementById("dog-mood-image");
 
             const totalEl = document.getElementById("count-total");
-            const pendingEl = document.getElementById("count-pending");
-            const doneEl = document.getElementById("count-done");
-            const attentionEl = document.getElementById("count-attention");
+            const activeEl = document.getElementById("count-active");
+            const highEl = document.getElementById("count-high");
+            const historyEl = document.getElementById("count-history");
 
             const dogState = data.dog_state || "IDLE";
-            const dogMessage = data.message || "Albus is waiting";
+            const dogMessage = data.message || "Watching configured sources";
 
             if (dogCard) {
                 dogCard.className = `dog-card dog-${dogState.toLowerCase()}`;
                 dogCard.dataset.currentState = dogState;
             }
 
-            if (stateEl) {
-                stateEl.textContent = dogState;
-            }
-
-            if (messageEl) {
-                messageEl.textContent = dogMessage;
-            }
+            if (stateEl) stateEl.textContent = dogState;
+            if (messageEl) messageEl.textContent = dogMessage;
 
             if (imageEl) {
-                imageEl.src = `/static/images/status/${dogState}/1.png?t=${Date.now()}`;
-                imageEl.alt = `Albus ${dogState}`;
+                updateAlbusImage(dogState);
             }
 
             if (data.counts) {
-                const attention = Number(data.counts.overdue || 0) + Number(data.counts.due_soon || 0);
-
                 if (totalEl) totalEl.textContent = data.counts.all;
-                if (pendingEl) pendingEl.textContent = data.counts.pending;
-                if (doneEl) doneEl.textContent = data.counts.done;
-                if (attentionEl) attentionEl.textContent = attention;
-
-                const previousTotal = Number(dogCard?.dataset.currentTotal || 0);
-                const previousPending = Number(dogCard?.dataset.currentPending || 0);
-                const previousDone = Number(dogCard?.dataset.currentDone || 0);
-                const previousAttention = Number(dogCard?.dataset.currentAttention || 0);
+                if (activeEl) activeEl.textContent = data.counts.active;
+                if (highEl) highEl.textContent = data.counts.high;
+                if (historyEl) historyEl.textContent = data.counts.history;
 
                 const countsChanged =
-                    previousTotal !== Number(data.counts.all) ||
-                    previousPending !== Number(data.counts.pending) ||
-                    previousDone !== Number(data.counts.done) ||
-                    previousAttention !== attention;
+                    Number(dogCard?.dataset.currentTotal || 0) !== Number(data.counts.all) ||
+                    Number(dogCard?.dataset.currentActive || 0) !== Number(data.counts.active) ||
+                    Number(dogCard?.dataset.currentHigh || 0) !== Number(data.counts.high) ||
+                    Number(dogCard?.dataset.currentHistory || 0) !== Number(data.counts.history);
 
                 if (countsChanged) {
                     window.location.reload();
